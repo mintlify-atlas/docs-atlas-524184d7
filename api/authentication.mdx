@@ -1,0 +1,436 @@
+---
+title: "Auth Endpoints: Register, Login, and Password Reset"
+sidebarTitle: "Authentication"
+description: "Full reference for the four public auth endpoints: create an account, log in for a JWT, request a password reset email, and set a new password."
+---
+
+The Blackterz API provides four public authentication endpoints — no JWT is required to call any of them. Successful login and registration both return a signed JWT that must be included in all subsequent protected requests. All four endpoints are covered by the auth rate limiter (10 req / 15 min in production).
+
+---
+
+## POST /api/auth/register
+
+Create a new user account. The supplied password is hashed with bcrypt (10 salt rounds) before storage — the plaintext password is never persisted.
+
+**Authentication:** None required  
+**Rate limited:** Yes
+
+### Request Body
+
+<ParamField body="nombre" type="string" required>
+  Display name for the new user.
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  Email address. Must be unique across all accounts and match the format `user@domain.tld`.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Plaintext password. Must be at least 6 characters. Stored as a bcrypt hash — never returned in any response.
+</ParamField>
+
+### Responses
+
+<Tabs>
+  <Tab title="201 Created">
+    Account created successfully.
+
+    <ResponseField name="status" type="string">
+      Always `"ok"` on success.
+    </ResponseField>
+    <ResponseField name="message" type="string">
+      Human-readable confirmation: `"Usuario registrado exitosamente"`.
+    </ResponseField>
+    <ResponseField name="data" type="object">
+      <Expandable title="data fields">
+        <ResponseField name="id" type="integer">
+          Auto-incremented ID of the newly created user.
+        </ResponseField>
+        <ResponseField name="nombre" type="string">
+          Display name as provided.
+        </ResponseField>
+        <ResponseField name="email" type="string">
+          Email address as provided.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+
+    ```json
+    {
+      "status": "ok",
+      "message": "Usuario registrado exitosamente",
+      "data": {
+        "id": 7,
+        "nombre": "Ana García",
+        "email": "ana@example.com"
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="400 Bad Request">
+    Missing fields, invalid email format, or password shorter than 6 characters.
+
+    ```json
+    {
+      "status": "error",
+      "message": "Los campos nombre, email y password son requeridos"
+    }
+    ```
+
+    ```json
+    {
+      "status": "error",
+      "message": "Formato de email inválido"
+    }
+    ```
+
+    ```json
+    {
+      "status": "error",
+      "message": "La contraseña debe tener al menos 6 caracteres"
+    }
+    ```
+  </Tab>
+  <Tab title="409 Conflict">
+    The email address is already registered.
+
+    ```json
+    {
+      "status": "error",
+      "message": "El email ya está registrado"
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Example
+
+<CodeGroup>
+  ```bash curl
+  curl -X POST http://localhost:3000/api/auth/register \
+    -H "Content-Type: application/json" \
+    -d '{
+      "nombre": "Ana García",
+      "email": "ana@example.com",
+      "password": "secreto123"
+    }'
+  ```
+
+  ```javascript JavaScript (fetch)
+  const response = await fetch('http://localhost:3000/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      nombre: 'Ana García',
+      email: 'ana@example.com',
+      password: 'secreto123',
+    }),
+  });
+
+  const data = await response.json();
+  // data.data.id → new user's ID
+  ```
+</CodeGroup>
+
+<Note>
+  Registration does **not** return a JWT. Call `POST /api/auth/login` immediately after registration to obtain a token.
+</Note>
+
+---
+
+## POST /api/auth/login
+
+Authenticate with email and password. Returns a signed JWT valid for 7 days. The token payload contains `usuario_id`, `nombre`, and `email`.
+
+**Authentication:** None required  
+**Rate limited:** Yes
+
+### Request Body
+
+<ParamField body="email" type="string" required>
+  The registered email address.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The account password in plaintext. Verified against the stored bcrypt hash using `bcrypt.compare()`.
+</ParamField>
+
+### Responses
+
+<Tabs>
+  <Tab title="200 OK">
+    Credentials valid and account active.
+
+    <ResponseField name="status" type="string">
+      Always `"ok"` on success.
+    </ResponseField>
+    <ResponseField name="message" type="string">
+      `"Inicio de sesión exitoso"`.
+    </ResponseField>
+    <ResponseField name="data" type="object">
+      <Expandable title="data fields">
+        <ResponseField name="token" type="string">
+          Signed JWT. Include this in all subsequent protected requests as `Authorization: Bearer <token>`. Expires after 7 days.
+        </ResponseField>
+        <ResponseField name="usuario" type="object">
+          <Expandable title="usuario fields">
+            <ResponseField name="id" type="integer">
+              The authenticated user's ID.
+            </ResponseField>
+            <ResponseField name="nombre" type="string">
+              The user's display name.
+            </ResponseField>
+            <ResponseField name="email" type="string">
+              The user's email address.
+            </ResponseField>
+          </Expandable>
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+
+    ```json
+    {
+      "status": "ok",
+      "message": "Inicio de sesión exitoso",
+      "data": {
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "usuario": {
+          "id": 7,
+          "nombre": "Ana García",
+          "email": "ana@example.com"
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="400 Bad Request">
+    One or both required fields are missing.
+
+    ```json
+    {
+      "status": "error",
+      "message": "Los campos email y password son requeridos"
+    }
+    ```
+  </Tab>
+  <Tab title="401 Unauthorized">
+    Email not found or password does not match. The message is intentionally generic to prevent email enumeration.
+
+    ```json
+    {
+      "status": "error",
+      "message": "Credenciales inválidas"
+    }
+    ```
+  </Tab>
+  <Tab title="403 Forbidden">
+    Credentials are correct but the account has been soft-deleted.
+
+    ```json
+    {
+      "status": "error",
+      "message": "Esta cuenta ha sido desactivada"
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Example
+
+<CodeGroup>
+  ```bash curl
+  curl -X POST http://localhost:3000/api/auth/login \
+    -H "Content-Type: application/json" \
+    -d '{
+      "email": "ana@example.com",
+      "password": "secreto123"
+    }'
+  ```
+
+  ```javascript JavaScript (fetch)
+  const response = await fetch('http://localhost:3000/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'ana@example.com',
+      password: 'secreto123',
+    }),
+  });
+
+  const { data } = await response.json();
+  // Store data.token for use in protected requests
+  localStorage.setItem('token', data.token);
+  ```
+</CodeGroup>
+
+<Warning>
+  The JWT is valid for **7 days**. After expiry, the middleware returns `401` with `"Token expirado. Iniciá sesión nuevamente"`. Your client must redirect to login and obtain a fresh token.
+</Warning>
+
+---
+
+## POST /api/auth/forgot-password
+
+Trigger a password reset email. If the supplied email belongs to an active account, a secure 64-character hex token is generated, stored with a 1-hour expiry, and emailed as a reset link. If the email is not found, the response is identical — this prevents account enumeration.
+
+**Authentication:** None required  
+**Rate limited:** Yes (shared auth limiter)
+
+### Request Body
+
+<ParamField body="email" type="string" required>
+  The email address associated with the account to recover.
+</ParamField>
+
+### Responses
+
+<Tabs>
+  <Tab title="200 OK">
+    Always returned regardless of whether the email exists.
+
+    ```json
+    {
+      "ok": true,
+      "mensaje": "Si el email existe, recibirás un correo con las instrucciones"
+    }
+    ```
+  </Tab>
+  <Tab title="400 Bad Request">
+    The `email` field was omitted entirely.
+
+    ```json
+    {
+      "ok": false,
+      "mensaje": "El email es obligatorio"
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Reset Link Format
+
+When an email is found and active, the user receives a message containing a link in the following format:
+
+```
+{APP_URL}/reset-password.html?token=<64-char-hex-token>
+```
+
+`APP_URL` defaults to `http://localhost:3000` if the environment variable is not set. The token expires **1 hour** after generation and is single-use.
+
+### Example
+
+<CodeGroup>
+  ```bash curl
+  curl -X POST http://localhost:3000/api/auth/forgot-password \
+    -H "Content-Type: application/json" \
+    -d '{ "email": "ana@example.com" }'
+  ```
+
+  ```javascript JavaScript (fetch)
+  const response = await fetch('http://localhost:3000/api/auth/forgot-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'ana@example.com' }),
+  });
+
+  const data = await response.json();
+  // data.ok === true regardless of whether the email exists
+  ```
+</CodeGroup>
+
+<Note>
+  The API always returns `200` for this endpoint. Do not use the response to infer whether an account exists.
+</Note>
+
+---
+
+## POST /api/auth/reset-password
+
+Set a new password using the token from the reset email. The token is validated against the `password_resets` table — it must exist, be unused, and not have passed its `expira_en` timestamp. On success, the token is immediately marked as used and cannot be reused.
+
+**Authentication:** None required  
+**Rate limited:** Yes (shared auth limiter)
+
+### Request Body
+
+<ParamField body="token" type="string" required>
+  The 64-character hex token from the reset link query string (`?token=...`).
+</ParamField>
+
+<ParamField body="passwordNueva" type="string" required>
+  The new plaintext password. Must be at least 8 characters. Hashed with bcrypt (10 rounds) before storage.
+</ParamField>
+
+### Responses
+
+<Tabs>
+  <Tab title="200 OK">
+    Password updated and token consumed.
+
+    ```json
+    {
+      "ok": true,
+      "mensaje": "Contraseña actualizada. Ya podés iniciar sesión"
+    }
+    ```
+  </Tab>
+  <Tab title="400 Bad Request">
+    Missing fields, password too short, or invalid / expired / already-used token.
+
+    ```json
+    {
+      "ok": false,
+      "mensaje": "Token y nueva contraseña son obligatorios"
+    }
+    ```
+
+    ```json
+    {
+      "ok": false,
+      "mensaje": "La nueva contraseña debe tener al menos 8 caracteres"
+    }
+    ```
+
+    ```json
+    {
+      "ok": false,
+      "mensaje": "El enlace es inválido o ya expiró"
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Example
+
+<CodeGroup>
+  ```bash curl
+  curl -X POST http://localhost:3000/api/auth/reset-password \
+    -H "Content-Type: application/json" \
+    -d '{
+      "token": "a3f8c2e1b7d94f0c6a2e5b8d1f4c7a9e3b6d2f5a8c1e4b7d0f3a6c9e2b5d8f1",
+      "passwordNueva": "nuevaContraseña123"
+    }'
+  ```
+
+  ```javascript JavaScript (fetch)
+  // token is read from the URL: /reset-password.html?token=...
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token');
+
+  const response = await fetch('http://localhost:3000/api/auth/reset-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      token,
+      passwordNueva: 'nuevaContraseña123',
+    }),
+  });
+
+  const data = await response.json();
+  // data.ok === true → redirect to login
+  ```
+</CodeGroup>
+
+<Warning>
+  Reset tokens are **single-use and expire after 1 hour**. If a user clicks an already-used link or one that has timed out, they will receive a `400` response and must request a new reset email.
+</Warning>

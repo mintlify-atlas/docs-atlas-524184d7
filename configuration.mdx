@@ -1,0 +1,229 @@
+---
+title: "Configure Blackterz: Environment Variables Reference"
+sidebarTitle: "Configuration"
+description: "Complete reference for every Blackterz environment variable: server port, MySQL connection, JWT secret, SMTP email, and the AscendAPI key for exercise videos."
+---
+
+All Blackterz configuration is managed through a single `.env` file in the project root. The file is loaded at startup by `dotenv` before any other module initializes, so every variable is available in `process.env` throughout the entire application. No configuration is hardcoded in source files.
+
+To create your configuration file from the provided template, run:
+
+```bash
+cp .env.example .env
+```
+
+Then open `.env` in your editor and fill in the values for your environment. The sections below document every supported variable.
+
+<Warning>
+  `.env` is listed in `.gitignore` and **must never be committed to version control**. It contains secrets (database passwords, JWT signing keys, SMTP credentials, and API keys) that would expose your entire system if leaked. Only `.env.example` — which contains no real values — belongs in the repository.
+</Warning>
+
+---
+
+## Server
+
+<ParamField path="PORT" type="number" default="3000">
+  The port the Express server listens on. The server falls back to `3000` if this variable is unset:
+
+  ```js
+  const PORT = process.env.PORT || 3000;
+  ```
+
+  Change this if port 3000 is already occupied on your machine, or when deploying behind a reverse proxy.
+</ParamField>
+
+<ParamField path="NODE_ENV" type="string" default="development">
+  Runtime mode. Setting this to `production` enables strict security behavior across the application. Any other value (including leaving it blank) is treated as development mode.
+
+  The most visible effect is on the auth rate limiter:
+
+  | Value | Max auth attempts per 15 min |
+  |---|---|
+  | `production` | **10** (brute-force protection) |
+  | anything else | **100** (relaxed for local testing) |
+</ParamField>
+
+---
+
+## Database
+
+All `DB_*` variables are passed directly to the `mysql2` connection pool in `src/config/db.js`.
+
+<ParamField path="DB_HOST" type="string" default="localhost">
+  Hostname or IP address of the MySQL server. Use `localhost` when MySQL runs on the same machine as the Node.js process. For Docker or remote deployments, set this to the container name or server IP.
+</ParamField>
+
+<ParamField path="DB_PORT" type="number" default="3306">
+  TCP port MySQL listens on. The MySQL default is `3306`. Only change this if you have configured MySQL to use a non-standard port.
+</ParamField>
+
+<ParamField path="DB_USER" type="string" required>
+  MySQL username that has `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `ALTER`, and `CREATE` privileges on the `fitness_app` database.
+</ParamField>
+
+<ParamField path="DB_PASSWORD" type="string">
+  Password for the MySQL user. Leave this blank (empty string) if your local MySQL install has no password set for the user:
+
+  ```ini
+  DB_PASSWORD=
+  ```
+</ParamField>
+
+<ParamField path="DB_NAME" type="string" required>
+  Name of the MySQL database. This **must be set to `fitness_app`**. The database is not named `blackterz` — that name refers to the application, not the schema. All migration files and seed scripts target `fitness_app` explicitly.
+
+  ```ini
+  DB_NAME=fitness_app
+  ```
+</ParamField>
+
+<Note>
+  The database name in `.env.example` ships as `DB_NAME=blackterz`, which is incorrect and will cause a connection error. Always override this to `fitness_app` after copying the example file.
+</Note>
+
+---
+
+## JWT
+
+<ParamField path="JWT_SECRET" type="string" required>
+  The secret key used to sign and verify all JSON Web Tokens issued by `POST /api/auth/login`. Tokens are signed with HMAC-SHA256 (`HS256`) and expire after 7 days.
+
+  In development you can use any string. In production use a long cryptographically random value.
+</ParamField>
+
+<Tip>
+  Generate a production-grade JWT secret with Node.js built-in `crypto` — no extra dependencies needed:
+
+  ```bash
+  node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
+  ```
+
+  This outputs a 128-character hex string. Paste the result as your `JWT_SECRET` value.
+</Tip>
+
+---
+
+## Email (Password Recovery)
+
+These variables configure the Nodemailer SMTP transport used by the password recovery flow. When a user requests a reset link, the server sends an email containing a time-limited token URL built from `APP_URL`.
+
+<ParamField path="EMAIL_HOST" type="string">
+  SMTP server hostname. Example: `smtp.gmail.com`
+</ParamField>
+
+<ParamField path="EMAIL_PORT" type="number">
+  SMTP port. Common values:
+  - `587` — STARTTLS (recommended)
+  - `465` — SSL/TLS
+  - `25` — plain (not recommended for production)
+
+  Example: `587`
+</ParamField>
+
+<ParamField path="EMAIL_USER" type="string">
+  SMTP authentication username. This is typically the full sender email address. Example: `noreply@yourdomain.com`
+</ParamField>
+
+<ParamField path="EMAIL_PASS" type="string">
+  SMTP authentication password. For Gmail, generate an **App Password** from your Google Account security settings rather than using your main account password.
+</ParamField>
+
+<ParamField path="APP_URL" type="string">
+  Base URL of the application, used to construct the password reset link that is embedded in recovery emails. Must not have a trailing slash.
+
+  ```ini
+  # Local development
+  APP_URL=http://localhost:3000
+
+  # Production
+  APP_URL=https://yourdomain.com
+  ```
+</ParamField>
+
+<Tabs>
+  <Tab title="Gmail Setup">
+    1. Enable 2-Step Verification on your Google Account.
+    2. Go to **Google Account → Security → App passwords**.
+    3. Generate a new app password for "Mail" on "Other device".
+    4. Use that 16-character password as `EMAIL_PASS`.
+
+    ```ini
+    EMAIL_HOST=smtp.gmail.com
+    EMAIL_PORT=587
+    EMAIL_USER=youraddress@gmail.com
+    EMAIL_PASS=abcd efgh ijkl mnop
+    APP_URL=http://localhost:3000
+    ```
+  </Tab>
+  <Tab title="Generic SMTP">
+    ```ini
+    EMAIL_HOST=mail.yourdomain.com
+    EMAIL_PORT=587
+    EMAIL_USER=noreply@yourdomain.com
+    EMAIL_PASS=your_smtp_password
+    APP_URL=https://yourdomain.com
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## AscendAPI (Exercise Videos)
+
+<ParamField path="ASCENDAPI_KEY" type="string">
+  Your RapidAPI subscription key for the **"EDB with Videos and Images by AscendAPI"** product. This key is required for exercise video playback in the catalog detail panel.
+
+  To obtain a key:
+  1. Create a free account at [rapidapi.com](https://rapidapi.com).
+  2. Search for "EDB with Videos and Images by AscendAPI".
+  3. Subscribe to the **Basic (free)** plan.
+  4. Copy the `X-RapidAPI-Key` value shown in the API playground.
+
+  The free tier includes **2,000 requests per month**, which is sufficient to load videos for the entire 64-exercise catalog with room to spare.
+</ParamField>
+
+<Note>
+  If `ASCENDAPI_KEY` is not set, the application will start and function normally — exercise images and text will display correctly, but the video playback feature in the exercise detail panel will not work. Set this variable only when you need video functionality.
+</Note>
+
+---
+
+## Complete .env Template
+
+Here is a fully annotated template you can copy directly into your `.env` file:
+
+<CodeGroup>
+```ini Minimal (no email, no video)
+PORT=3000
+NODE_ENV=development
+
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=
+DB_NAME=fitness_app
+
+JWT_SECRET=replace_this_with_a_long_random_string
+```
+
+```ini Full (all features enabled)
+PORT=3000
+NODE_ENV=production
+
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=your_mysql_password
+DB_NAME=fitness_app
+
+JWT_SECRET=your_128_char_hex_secret_here
+
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USER=noreply@yourdomain.com
+EMAIL_PASS=your_app_specific_password
+APP_URL=https://yourdomain.com
+
+ASCENDAPI_KEY=your_rapidapi_key_here
+```
+</CodeGroup>

@@ -1,0 +1,291 @@
+---
+title: "Security Model: JWT, bcrypt, Rate Limiting, and Anti-Spoofing"
+sidebarTitle: "Security"
+description: "How Blackterz authenticates users, hashes passwords, prevents ID spoofing, limits brute-force attempts, and guards file uploads and SQL queries."
+---
+
+Blackterz uses a layered security model. No single mechanism is responsible for all protection — JWT authentication, bcrypt hashing, parameterized SQL, rate limiting, anti-spoofing in controllers, and HTTP security headers each address a distinct attack surface. This page describes each layer in full, with the real source code that implements it.
+
+## JWT Authentication
+
+All protected API routes run the `verificarToken` middleware before any controller is reached. The middleware reads the `Authorization` header, verifies the JWT signature and expiry, and attaches the decoded payload to `req.usuario` so downstream controllers can read the caller's identity without trusting the request body.
+
+```js
+// src/middlewares/authMiddleware.js
+function verificarToken(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Token de acceso requerido',
+      });
+    }
+
+    const partes = authHeader.split(' ');
+
+    if (partes.length !== 2 || partes[0] !== 'Bearer') {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Formato de token inválido. Usar: Bearer <token>',
+      });
+    }
+
+    const token = partes[1];
+
+    // Verifies signature AND expiry. Throws on failure.
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // { usuario_id, iat, exp } — controllers use req.usuario.usuario_id
+    req.usuario = decoded;
+
+    next();
+
+  } catch (error) {
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Token expirado. Iniciá sesión nuevamente',
+      });
+    }
+
+    return res.status(401).json({
+      status: 'error',
+      message: 'Token inválido',
+    });
+  }
+}
+```
+
+`jwt.verify()` performs three checks in one call: it verifies the HMAC-SHA256 **signature** (proving the token was issued by this server and has not been tampered with), it checks the **expiry** (`exp` claim), and it **decodes** the payload and returns it. If any check fails, it throws and the request never reaches the controller.
+
+<Tip>
+  The JWT payload contains `{ usuario_id, iat, exp }`. Controllers always read `req.usuario.usuario_id` — they never accept a user ID from `req.body` or `req.params` for operations that require ownership verification.
+</Tip>
+
+## bcrypt Password Hashing
+
+Passwords are hashed with bcrypt before being stored. The model layer never sees the plaintext — hashing happens in the controller before `crearUsuario()` is called.
+
+```js
+// Registration — 10 salt rounds = 2^10 = 1024 iterations
+const passwordHash = await bcrypt.hash(password, 10);
+```
+
+```js
+// Login — compare extracts the salt from the stored hash automatically
+const valida = await bcrypt.compare(passwordIngresada, usuario.password);
+```
+
+The stored format is:
+
+```
+$2b$10$<22-char salt><31-char hash>
+ ↑   ↑
+alg  rounds
+```
+
+Every hash is unique even for identical passwords because bcrypt generates a new random salt on each `bcrypt.hash()` call. This defeats precomputed rainbow table attacks. The `10` round factor means the server performs 1,024 iterations per check — slow enough to frustrate brute-force attempts, fast enough for normal login latency (~100 ms).
+
+<Note>
+  The `password` column on the `usuarios` table is `VARCHAR(60)` — exactly the length of a bcrypt hash. The raw password is never written to the database at any point in the code path.
+</Note>
+
+## Anti-ID Spoofing
+
+Any endpoint that creates or modifies user-owned resources reads `usuario_id` **exclusively from `req.usuario`** (the verified JWT payload). Any `usuario_id` present in `req.body` is silently ignored.
+
+```js
+// src/models/sesionModel.js — guardarSesionCompleta()
+// usuario_id is set by the controller from req.usuario, not from the body
+const [resultadoSesion] = await connection.execute(
+  `INSERT INTO sesiones_entrenamiento (usuario_id, rutina_id, fecha, notas, duracion_minutos)
+   VALUES (?, ?, ?, ?, ?)`,
+  [
+    datosSesion.usuario_id,   // ← always from req.usuario.usuario_id
+    datosSesion.rutina_id,
+    datosSesion.fecha,
+    datosSesion.notas || null,
+    datosSesion.duracion_minutos || null,
+  ]
+);
+```
+
+The same principle applies to soft-deletes and routine operations:
+
+```js
+// src/models/rutinaModel.js — desactivarRutina()
+// The WHERE clause includes both the route param AND the user's own ID
+const sql = 'UPDATE rutinas SET activa = FALSE WHERE id = ? AND usuario_id = ?';
+const [result] = await pool.execute(sql, [rutinaId, usuarioId]);
+```
+
+Even if an attacker crafts a request with a different `usuario_id` in the body, the SQL `WHERE usuario_id = ?` uses the value from the verified JWT. A user can only modify resources they own.
+
+## Rate Limiting
+
+`express-rate-limit` is applied exclusively to the `/api/auth/*` router to prevent brute-force attacks against passwords.
+
+```js
+// src/server.js
+const MAX_INTENTOS_LOGIN = process.env.NODE_ENV === 'production' ? 10 : 100;
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15-minute window
+  max: MAX_INTENTOS_LOGIN,
+  message: {
+    ok: false,
+    mensaje: 'Demasiados intentos. Esperá 15 minutos e intentá de nuevo.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use('/api/auth', authLimiter, authRouter);
+```
+
+In **production** (`NODE_ENV=production`): 10 requests per 15 minutes per IP. In **development**: 100 requests, so the limit does not interfere with local testing or automated test runs. Exceeding the limit returns HTTP `429 Too Many Requests` with the JSON error message above.
+
+## Security Headers (helmet)
+
+`helmet()` is the first middleware applied, before `cors` and `express.json`, so it runs on every request including static file serving.
+
+```js
+// src/server.js
+app.use(helmet({
+  contentSecurityPolicy: false, // disabled — frontend loads Chart.js from a CDN
+                                // and uses inline scripts
+}));
+```
+
+Helmet adds the following headers automatically:
+
+| Header | Protection |
+|---|---|
+| `X-Content-Type-Options: nosniff` | Prevents MIME-type sniffing |
+| `X-Frame-Options: SAMEORIGIN` | Blocks clickjacking via iframes |
+| `Strict-Transport-Security` | Forces HTTPS on future visits |
+| `X-XSS-Protection` | Legacy XSS filter (older browsers) |
+| `Referrer-Policy` | Controls referrer information |
+
+`contentSecurityPolicy` is explicitly disabled because `public/index.html` loads Chart.js from `cdnjs.cloudflare.com`. Enabling the default CSP would block that CDN resource and break the progress graph.
+
+## CORS
+
+```js
+// src/server.js
+app.use(cors());
+```
+
+`cors()` with no arguments allows requests from any origin. This is acceptable during development where the frontend and API share the same origin (`localhost:3000`).
+
+<Warning>
+  For production, restrict CORS to your actual domain:
+  ```js
+  app.use(cors({ origin: 'https://yourdomain.com' }));
+  ```
+  Leaving the wildcard in production allows any site to make credentialed requests to your API.
+</Warning>
+
+## Soft-Delete Account Guard
+
+The auth controller explicitly checks the `activo` flag before comparing passwords. A deactivated account cannot log in even if it still exists in the database with a valid password hash.
+
+```js
+// src/models/authModel.js — buscarUsuarioPorEmail() includes activo in SELECT
+async function buscarUsuarioPorEmail(email) {
+  const [rows] = await pool.execute(
+    `SELECT id, nombre, email, password, created_at, activo
+     FROM usuarios WHERE email = ?`,
+    [email]
+  );
+  return rows.length > 0 ? rows[0] : null;
+}
+```
+
+The controller then rejects the login if `activo` is `0`:
+
+```js
+// authController.js — login check (abridged)
+if (!usuario.activo) {
+  return res.status(403).json({
+    message: 'Esta cuenta ha sido desactivada',
+  });
+}
+```
+
+HTTP `403 Forbidden` is used here (not `401 Unauthorized`) because the user is identified correctly — they are simply not permitted access.
+
+## SQL Injection Prevention
+
+Every query in every model uses `pool.execute()` with parameterized placeholders (`?`). The `mysql2` driver escapes all bound values before constructing the query string. There is no string concatenation in any SQL query across the codebase.
+
+```js
+// src/models/rutinaModel.js — safe parameterized query
+const [rows] = await pool.execute(sql, [rutinaId, usuarioId]);
+
+// src/models/authModel.js — safe email lookup
+const [rows] = await pool.execute(
+  `SELECT id, nombre, email, password, created_at, activo
+   FROM usuarios WHERE email = ?`,
+  [email]
+);
+```
+
+<Note>
+  `pool.execute()` uses true server-side prepared statements, which is safer than `pool.query()` (client-side escaping). Prefer `execute` in all model code.
+</Note>
+
+## File Upload Security
+
+Avatar uploads are handled by `multer` with explicit restrictions on file type and size.
+
+```js
+// src/controllers/usuarioController.js (multer configuration)
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, 'public/images/avatars/'),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `avatar-${req.usuario.usuario_id}${ext}`);
+  },
+});
+```
+
+<CardGroup cols={2}>
+  <Card title="File type filter" icon="file-shield">
+    Only images (`image/jpeg`, `image/png`, `image/gif`, `image/webp`) are accepted. Other MIME types are rejected before the file is written to disk.
+  </Card>
+  <Card title="Size limit" icon="weight-scale">
+    Maximum upload size is **2 MB**. Requests exceeding this return a 400 error before the body is fully read.
+  </Card>
+</CardGroup>
+
+Files are named `avatar-{usuarioId}.{ext}`, so uploading a new photo overwrites the previous one without accumulating stale files. The filename is derived from `req.usuario.usuario_id` (the verified JWT value), not from the original filename provided by the client.
+
+## Password Reset Tokens
+
+```sql
+-- password_resets table
+id          INT  PK AUTO_INCREMENT
+usuario_id  BIGINT  FK → usuarios.id
+token       VARCHAR(64)  UNIQUE
+expira_en   DATETIME
+usado       TINYINT(1)  DEFAULT 0
+created_at  TIMESTAMP
+```
+
+Reset tokens are stored in the `password_resets` table with an expiry timestamp. After a token is redeemed, `usado` is set to `1` — subsequent attempts with the same token are rejected even if the token has not yet expired. This makes every reset token single-use.
+
+## localStorage Warning
+
+<Warning>
+  The frontend currently stores the JWT in `localStorage`:
+  ```js
+  // public/app.js
+  localStorage.setItem('token', data.token);
+  ```
+  `localStorage` is accessible to any JavaScript running on the page. A successful XSS attack could exfiltrate the token and allow an attacker to impersonate the user for the full 7-day token lifetime.
+
+  In a production deployment, store the JWT in an **`httpOnly` cookie** instead. `httpOnly` cookies are invisible to JavaScript — even injected scripts cannot read them — making them immune to XSS-based token theft. The trade-off is that cookies are sent automatically on every request, so CSRF protection must also be applied.
+</Warning>

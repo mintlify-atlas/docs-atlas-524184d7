@@ -1,0 +1,191 @@
+---
+title: "Exercise Catalog and Muscle Group Assignments in Blackterz"
+sidebarTitle: "Exercises"
+description: "Browse 64 seeded exercises with images, categories, and 15 muscle group assignments. Videos are served via AscendAPI and require a RapidAPI key."
+---
+
+Blackterz ships with a catalog of **64 exercises** seeded from [strengthlevel.es](https://strengthlevel.es) data. Every exercise has a Spanish name, a description, a category (`fuerza`, `cardio`, etc.), a color `.avif` image (~12 KB each), and an optional looping MP4 video sourced via AscendAPI. The catalog is read-only from the API perspective — exercises are managed through database seeds and migrations, not end-user requests.
+
+## Listing All Exercises
+
+`GET /api/ejercicios` returns the full catalog, including each exercise's associated muscle groups as a comma-separated string. The endpoint requires a valid JWT.
+
+```bash
+curl http://localhost:3000/api/ejercicios \
+  -H "Authorization: Bearer <token>"
+```
+
+The model executes a single `GROUP_CONCAT` query across the exercises–muscle groups join:
+
+```sql
+SELECT
+  e.id,
+  e.nombre,
+  e.descripcion,
+  e.categoria,
+  e.imagen_url,
+  e.gif_url,
+  GROUP_CONCAT(DISTINCT gm.nombre ORDER BY gm.nombre SEPARATOR ', ') AS musculos
+FROM ejercicios e
+LEFT JOIN ejercicios_grupos_musculares eg ON e.id = eg.ejercicio_id
+LEFT JOIN grupos_musculares gm ON eg.grupo_muscular_id = gm.id
+GROUP BY e.id, e.nombre, e.descripcion, e.categoria, e.imagen_url, e.gif_url
+ORDER BY e.nombre ASC
+```
+
+### Response fields
+
+<ResponseField name="id" type="number">
+  The exercise's primary key.
+</ResponseField>
+
+<ResponseField name="nombre" type="string">
+  Spanish name of the exercise, e.g. `"Press de banca"`.
+</ResponseField>
+
+<ResponseField name="descripcion" type="string">
+  Brief description of technique or focus.
+</ResponseField>
+
+<ResponseField name="categoria" type="string">
+  Exercise category. Values include `"fuerza"`, `"cardio"`, and others defined in the seed.
+</ResponseField>
+
+<ResponseField name="imagen_url" type="string">
+  Server-relative path to the `.avif` image, e.g. `"/images/bench-press.avif"`. Served by `express.static`.
+</ResponseField>
+
+<ResponseField name="gif_url" type="string | null">
+  Absolute URL to an MP4 video from AscendAPI, or `null` if the video has not been fetched yet.
+</ResponseField>
+
+<ResponseField name="musculos" type="string">
+  Comma-separated list of muscle group names from the `grupos_musculares` table, e.g. `"Hombros, Pecho, Tríceps"`. Empty string if no assignments exist.
+</ResponseField>
+
+### Sample exercise object
+
+```json
+{
+  "id": 4,
+  "nombre": "Press de banca",
+  "descripcion": "Ejercicio compound para desarrollar el pecho, hombros y tríceps.",
+  "categoria": "fuerza",
+  "imagen_url": "/images/bench-press.avif",
+  "gif_url": "https://cdn.ascendapi.com/exercises/bench-press.mp4",
+  "musculos": "Hombros, Pecho, Tríceps"
+}
+```
+
+---
+
+## Muscle Groups
+
+The catalog covers **15 muscle groups** defined in the `grupos_musculares` table. Each exercise can have one or more principal or secondary group assignments via the `ejercicios_grupos_musculares` pivot table.
+
+<CardGroup cols={3}>
+  <Card title="Upper Body — Push" icon="arrow-up">
+    Hombros, Tríceps, Pecho
+  </Card>
+  <Card title="Upper Body — Pull" icon="arrow-down">
+    Bíceps, Antebrazos, Espalda Media, Espalda Baja, Trampas
+  </Card>
+  <Card title="Lower Body" icon="person-running">
+    Cuádriceps, Isquiotibiales, Gemelos, Glúteos, Aductores, Flexores Cadera
+  </Card>
+</CardGroup>
+
+<Card title="Core" icon="circle">
+  Core
+</Card>
+
+The `musculos` field returned by `GET /api/ejercicios` is a flat comma-separated string combining **all** muscle group assignments for that exercise. The frontend uses this string to power the real-time search filter — a query for `"Hombros"` matches every exercise that trains shoulders.
+
+---
+
+## Exercise Videos via AscendAPI
+
+The `gif_url` field is populated by the **AscendAPI** (available on RapidAPI). The API returns looping MP4 video URLs for standard exercises by English slug.
+
+<Accordion title="Setup instructions">
+  1. Create a RapidAPI account and subscribe to the AscendAPI.
+  2. Copy your API key.
+  3. Add it to your `.env` file:
+
+  ```bash
+  ASCENDAPI_KEY=your_rapidapi_key_here
+  ```
+
+  4. The seeder script maps Spanish exercise names to English slugs (e.g. `"Press de banca"` → `"bench-press"`) and fetches the video URL for each exercise.
+</Accordion>
+
+<Warning>
+  The AscendAPI **free tier allows 2,000 requests per month**. With 64 exercises in the catalog, a full re-seed consumes 64 requests. Do not re-run the seeder unnecessarily in production. If `gif_url` is `null` for an exercise, the frontend falls back to showing only the `.avif` static image.
+</Warning>
+
+---
+
+## Exercise Detail Modal (Lightbox)
+
+The frontend renders a full-screen lightbox when a user taps an exercise image during a training session or while browsing the catalog. The modal shows:
+
+- The exercise image at full size
+- Exercise name and description
+- Muscle group list
+- Category badge
+- Looping MP4 video (autoplay, muted) if `gif_url` is available
+
+The lightbox is dismissed by clicking the ✕ button, clicking the backdrop, or pressing `Escape`.
+
+---
+
+## Adding Exercises to a Routine
+
+Exercises are linked to routines through the `ejercicios_rutinas` pivot table. To set the exercise list for a routine, send an `ejercicios_ids` array in a `PUT /api/rutinas/:id` request. The array **completely replaces** the current list — include all exercises you want, in the order you want them.
+
+```json
+{
+  "nombre": "Push Day",
+  "descripcion": "Pecho, hombros y tríceps",
+  "ejercicios_ids": [4, 12, 7, 9]
+}
+```
+
+---
+
+## Adding Exercises Mid-Session
+
+Users can add exercises from the catalog during an active training session without modifying the base routine. The frontend renders an "Agregar ejercicio extra" search panel below the routine's exercise cards. Typing in the search box filters the catalog client-side using the `musculos` string — no additional API calls.
+
+Extra exercises added mid-session are:
+
+- Included in the `POST /api/sesiones` payload under `ejercicios[]`
+- Persisted to `localStorage` via `guardarEstadoEntrenamiento()` so they survive a page refresh
+- **Not** written back to the routine definition
+
+<Note>
+  The anti-duplicate filter (`obtenerIdsEjerciciosActivos()`) scans the active DOM cards and hides already-added exercises from the extra panel, preventing the user from accidentally adding the same exercise twice.
+</Note>
+
+---
+
+## Exercise Search
+
+Both the routine editor modal and the mid-session extra panel include a real-time search input. Filtering happens entirely client-side after the catalog is loaded once into memory:
+
+```js
+function filtrarCatalogo(termino) {
+  return catalogoEjercicios.filter(ej =>
+    ej.nombre.toLowerCase().includes(termino.toLowerCase()) ||
+    (ej.musculos && ej.musculos.toLowerCase().includes(termino.toLowerCase()))
+  );
+}
+```
+
+Searches match against both the exercise name and the muscle group list, so `"Pecho"` returns all chest exercises regardless of their name.
+
+---
+
+<Card title="API Reference — Exercises" icon="code" href="/api/exercises">
+  View full request/response schemas, error codes, and live playground for the `/api/ejercicios` endpoint.
+</Card>

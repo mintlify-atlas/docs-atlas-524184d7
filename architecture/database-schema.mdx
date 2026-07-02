@@ -1,0 +1,313 @@
+---
+title: "Blackterz Database Schema: Tables and Relationships"
+sidebarTitle: "Database Schema"
+description: "Full column-level reference for every table in the fitness_app MySQL database, including FKs, soft-delete flags, junction tables, and the migration history."
+---
+
+The MySQL database is named **`fitness_app`** (created in an earlier project and reused here). It holds ten tables that cover user accounts, workout routines, exercise catalogs, and training session records. The schema has evolved through a series of incremental migration files — each one tracked in the `docs/` directory — rather than being recreated from scratch.
+
+<Note>
+  The default fallback in `db.js` points to a database named `blackterz`, but the real database is `fitness_app`. Always confirm your `.env` file sets `DB_NAME=fitness_app`.
+</Note>
+
+## Tables
+
+<Accordion title="usuarios — User accounts">
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | BIGINT | PK, AUTO_INCREMENT | — |
+| `nombre` | VARCHAR(50) | NOT NULL | Display name |
+| `email` | VARCHAR(50) | UNIQUE, NOT NULL | Login identifier |
+| `password` | VARCHAR(60) | NOT NULL | bcrypt hash (`$2b$10$...`) |
+| `activo` | TINYINT(1) | DEFAULT 1 | `0` = soft-deleted account |
+| `avatar_url` | VARCHAR(255) | NULL | Path to uploaded photo, e.g. `/images/avatars/avatar-5.jpg` |
+| `nivel_experiencia` | ENUM | NULL | `Principiante` / `Intermedio` / `Avanzado` |
+| `peso_actual` | DECIMAL(5,2) | NULL | Body weight in kg |
+| `estatura_cm` | INT | NULL | Height in centimetres |
+| `sexo` | ENUM | NULL | `Masculino` / `Femenino` / `Otro` |
+| `onboarding_completado` | TINYINT(1) | DEFAULT 0 | Set to `1` after first-run form |
+| `created_at` | TIMESTAMP | — | — |
+| `updated_at` | TIMESTAMP | — | — |
+
+</Accordion>
+
+<Accordion title="rutinas — User-owned workout routines">
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | BIGINT | PK, AUTO_INCREMENT | — |
+| `usuario_id` | BIGINT | FK → usuarios.id | Owner — set from JWT, never from request body |
+| `nombre` | VARCHAR(50) | NOT NULL | — |
+| `descripcion` | TEXT | NULL | — |
+| `activa` | TINYINT(1) | DEFAULT 1 | `0` = soft-deleted routine |
+| `es_recomendada` | TINYINT(1) | DEFAULT 0 | Seed routines visible to all users |
+| `created_at` | TIMESTAMP | — | — |
+| `updated_at` | TIMESTAMP | — | — |
+
+</Accordion>
+
+<Accordion title="ejercicios — Exercise catalog">
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | BIGINT | PK, AUTO_INCREMENT | — |
+| `nombre` | VARCHAR(50) | NOT NULL | Spanish name, e.g. `Press de banca` |
+| `descripcion` | TEXT | NULL | — |
+| `categoria` | ENUM | — | `fuerza` / `cardio` / `flexibilidad` |
+| `imagen_url` | TEXT | NULL | Filename, e.g. `bench-press.avif` |
+| `gif_url` | TEXT | NULL | Animation URL (added in later migration) |
+| `created_at` | TIMESTAMP | — | — |
+| `updated_at` | TIMESTAMP | — | — |
+
+The catalog is populated by `seed.sql` and contains **64 exercises** across barbell, bodyweight, dumbbell, machine, and cable categories.
+
+</Accordion>
+
+<Accordion title="grupos_musculares — Muscle groups (15 entries)">
+
+| Column | Type | Constraints |
+|---|---|---|
+| `id` | BIGINT | PK, AUTO_INCREMENT |
+| `nombre` | VARCHAR(50) | UNIQUE |
+
+The 15 seeded groups are: Hombros, Tríceps, Pecho, Aductores, Antebrazos, Bíceps, Core, Cuádriceps, Espalda Baja, Espalda Media, Flexores Cadera, Gemelos, Glúteos, Isquiotibiales, Trampas.
+
+</Accordion>
+
+<Accordion title="ejercicios_grupos_musculares — Exercise → muscle group mapping">
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | BIGINT | PK, AUTO_INCREMENT | — |
+| `ejercicio_id` | BIGINT | FK → ejercicios.id | — |
+| `grupo_muscular_id` | BIGINT | FK → grupos_musculares.id | — |
+| `tipo` | ENUM | — | `principal` or `secundario` |
+
+Each exercise can have multiple `principal` and `secundario` muscle groups. The seed produces **188 rows** total.
+
+</Accordion>
+
+<Accordion title="ejercicios_rutinas — Junction table: routine ↔ exercise">
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | BIGINT | PK, AUTO_INCREMENT | — |
+| `rutina_id` | BIGINT | FK → rutinas.id | — |
+| `ejercicio_id` | BIGINT | FK → ejercicios.id | — |
+| `orden` | INT | — | Display position within the routine |
+| `series` | INT | — | Planned sets |
+| `repeticiones` | INT | — | Planned reps |
+| `peso` | DECIMAL(6,2) | — | Planned weight in kg |
+| `tiempo_descanso` | INT | NULL | Rest timer in seconds between sets |
+| `created_at` | TIMESTAMP | — | — |
+
+</Accordion>
+
+<Accordion title="sesiones_entrenamiento — Completed training sessions">
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | BIGINT | PK, AUTO_INCREMENT | — |
+| `usuario_id` | BIGINT | FK → usuarios.id | Taken from JWT, never from body |
+| `rutina_id` | BIGINT | FK → rutinas.id | Can be NULL if routine is later soft-deleted |
+| `fecha` | DATE | NOT NULL | Training date |
+| `duracion_minutos` | INT | NULL | Set when the user finalizes the session |
+| `notas` | TEXT | NULL | Optional session note |
+| `created_at` | TIMESTAMP | — | — |
+| `updated_at` | TIMESTAMP | — | — |
+
+<Note>
+  The `estado` column (pending/completed/cancelled) was removed in `migracion-drop-estado.sql`. The system only persists fully completed sessions, making `estado` redundant.
+</Note>
+
+</Accordion>
+
+<Accordion title="sesion_ejercicios — Exercises performed in a session">
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | BIGINT | PK, AUTO_INCREMENT | — |
+| `sesion_id` | BIGINT | FK → sesiones_entrenamiento.id | — |
+| `ejercicio_id` | BIGINT | FK → ejercicios.id | — |
+| `orden` | INT | — | Ordering within the session |
+| `notas` | TEXT | NULL | Per-exercise notes entered during training |
+| `created_at` | TIMESTAMP | — | — |
+
+Six columns that were originally in this table (`series_planificadas`, `repeticiones_planificadas`, `peso_planificado`, `completado`, `duracion_segundos`, `tiempo_descanso`) were removed in `migracion-dropear-columnas.sql` as redundant with data already tracked in `sesion_series` and `ejercicios_rutinas`.
+
+</Accordion>
+
+<Accordion title="sesion_series — Individual sets within a session exercise">
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | BIGINT | PK, AUTO_INCREMENT | — |
+| `sesion_ejercicio_id` | BIGINT | FK → sesion_ejercicios.id | — |
+| `numero_serie` | INT | NOT NULL | 1-based set number |
+| `repeticiones` | INT | — | Actual reps performed |
+| `peso` | DECIMAL(6,2) | — | Actual weight in kg |
+| `completada` | TINYINT(1) | DEFAULT 1 | Checkbox state; powers volume calculations |
+| `created_at` | TIMESTAMP | — | — |
+
+</Accordion>
+
+<Accordion title="password_resets — Password reset tokens">
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | INT | PK, AUTO_INCREMENT | — |
+| `usuario_id` | BIGINT | FK → usuarios.id | — |
+| `token` | VARCHAR(64) | UNIQUE | Stored hashed |
+| `expira_en` | DATETIME | — | Token expiry timestamp |
+| `usado` | TINYINT(1) | DEFAULT 0 | Set to `1` after redemption (single-use) |
+| `created_at` | TIMESTAMP | — | — |
+
+</Accordion>
+
+## Entity Relationships
+
+```
+usuarios 1 ──────────────── N rutinas
+usuarios 1 ──────────────── N sesiones_entrenamiento
+usuarios 1 ──────────────── N password_resets
+
+rutinas  1 ──────────────── N ejercicios_rutinas ──── N ← ejercicios
+rutinas  1 ──────────────── N sesiones_entrenamiento
+
+ejercicios 1 ──────────────── N ejercicios_grupos_musculares ──── N ← grupos_musculares
+ejercicios 1 ──────────────── N sesion_ejercicios
+
+sesiones_entrenamiento 1 ─── N sesion_ejercicios
+sesion_ejercicios      1 ─── N sesion_series
+```
+
+## The Soft-Delete Pattern
+
+Two tables use a boolean flag instead of a `DELETE` statement, so that training history is never orphaned:
+
+| Table | Column | Effect when `0` / `FALSE` |
+|---|---|---|
+| `usuarios` | `activo` | User cannot log in; account is hidden but data persists |
+| `rutinas` | `activa` | Routine disappears from the user's list; historical sessions linked to it remain |
+
+```js
+// src/models/usuarioModel.js — soft-deletes an account
+async function desactivarUsuario(usuarioId) {
+  const [resultado] = await pool.execute(
+    `UPDATE usuarios SET activo = FALSE WHERE id = ?`,
+    [usuarioId]
+  );
+  return resultado.affectedRows > 0;
+}
+```
+
+```js
+// src/models/rutinaModel.js — soft-deletes a routine
+async function desactivarRutina(rutinaId, usuarioId) {
+  const sql = 'UPDATE rutinas SET activa = FALSE WHERE id = ? AND usuario_id = ?';
+  const [result] = await pool.execute(sql, [rutinaId, usuarioId]);
+  return result.affectedRows;
+}
+```
+
+<Warning>
+  Always filter `activa = TRUE` when querying routines, and `activo = TRUE` when listing users or validating login. Omitting these filters surfaces deleted records.
+</Warning>
+
+## The JOIN Pattern: Routine with Exercises
+
+Fetching a routine with its full exercise list requires joining three tables in a single query. The result is tabular — one row per exercise — and is then restructured in JavaScript into a nested object.
+
+```sql
+-- src/models/rutinaModel.js — obtenerRutinaConEjercicios()
+SELECT
+  r.id          AS rutina_id,
+  r.nombre      AS rutina_nombre,
+  r.descripcion AS rutina_descripcion,
+  e.id          AS ejercicio_id,
+  e.nombre      AS ejercicio_nombre,
+  e.descripcion AS ejercicio_descripcion,
+  e.categoria   AS ejercicio_categoria,
+  e.imagen_url  AS ejercicio_imagen_url,
+  e.gif_url     AS ejercicio_gif_url,
+  er.orden,
+  er.series,
+  er.repeticiones,
+  er.peso
+FROM rutinas r
+LEFT JOIN ejercicios_rutinas er ON r.id = er.rutina_id
+LEFT JOIN ejercicios e ON er.ejercicio_id = e.id
+WHERE r.id = ? AND r.usuario_id = ? AND r.activa = TRUE
+ORDER BY er.orden ASC
+```
+
+`LEFT JOIN` is used so that a routine with zero exercises still returns a result (with `ejercicio_id = NULL`) rather than disappearing from the query entirely. The JavaScript restructuring step checks for `null` and produces an empty `ejercicios: []` array:
+
+```js
+// Same file — tabular rows → nested object
+const rutina = {
+  id:          rows[0].rutina_id,
+  nombre:      rows[0].rutina_nombre,
+  descripcion: rows[0].rutina_descripcion,
+  ejercicios:  [],
+};
+
+for (const fila of rows) {
+  if (fila.ejercicio_id !== null) {
+    rutina.ejercicios.push({
+      id:           fila.ejercicio_id,
+      nombre:       fila.ejercicio_nombre,
+      categoria:    fila.ejercicio_categoria,
+      imagen_url:   fila.ejercicio_imagen_url,
+      gif_url:      fila.ejercicio_gif_url,
+      orden:        fila.orden,
+      series:       fila.series,
+      repeticiones: fila.repeticiones,
+      peso:         fila.peso,
+    });
+  }
+}
+```
+
+## Migration History
+
+Schema changes are tracked as individual `.sql` files under `docs/`. Run them in chronological order on any fresh database after applying the base schema.
+
+<Tabs>
+  <Tab title="Account & Profile">
+
+| File | Change |
+|---|---|
+| `migracion-activo.sql` | `ALTER TABLE usuarios ADD COLUMN activo BOOLEAN DEFAULT TRUE` — enables soft-delete for accounts |
+| `migracion-avatar.sql` | `ALTER TABLE usuarios ADD COLUMN avatar_url VARCHAR(255) DEFAULT NULL` — stores path to multer-uploaded photo |
+| `migracion-hito17.sql` | Adds `nivel_experiencia`, `peso_actual`, `estatura_cm`, and `onboarding_completado` to `usuarios` for the onboarding flow |
+| `migracion-hito17-parte2.sql` | Adds `sexo ENUM('Masculino','Femenino','Otro')` to `usuarios` |
+
+  </Tab>
+  <Tab title="Routines & Exercises">
+
+| File | Change |
+|---|---|
+| `migracion-hito13.sql` | `ALTER TABLE rutinas ADD COLUMN activa BOOLEAN DEFAULT TRUE` — enables soft-delete for routines |
+| `migracion-rutinas-recomendadas.sql` | Adds `es_recomendada TINYINT(1)` to `rutinas` for seed routines visible to all users |
+| `migracion-gif-url.sql` | Adds `gif_url TEXT` to `ejercicios` for animated exercise previews |
+
+  </Tab>
+  <Tab title="Sessions Cleanup">
+
+| File | Change |
+|---|---|
+| `migracion-dropear-notas.sql` | Drops unused `notas` columns from `ejercicios_rutinas`, `rutinas`, and `sesion_series` |
+| `migracion-dropear-columnas.sql` | Drops 6 redundant columns: `series_planificadas`, `repeticiones_planificadas`, `peso_planificado`, and `completado` from `sesion_ejercicios`; `duracion_segundos` and `tiempo_descanso` from `sesion_series` |
+| `migracion-drop-estado.sql` | Drops `estado` from `sesiones_entrenamiento` (only completed sessions are ever persisted) |
+
+  </Tab>
+  <Tab title="Auth">
+
+| File | Change |
+|---|---|
+| `migracion-password-resets.sql` | Creates the `password_resets` table with `token`, `expira_en`, and `usado` columns |
+
+  </Tab>
+</Tabs>

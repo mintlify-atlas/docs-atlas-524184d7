@@ -1,0 +1,107 @@
+{
+  "projectType": "saas",
+  "projectName": "Blackterz Gym App",
+  "projectDescription": "A full-stack gym management web application for creating personalized workout routines, logging training sessions with per-set tracking, and visualizing progress through charts and personal records.",
+  "theme": "luma",
+  "primaryColor": "#0455de",
+  "lightColor": "#051475",
+  "darkColor": "#2f3038",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "configuration"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/authentication",
+              "features/routines",
+              "features/training-sessions",
+              "features/exercises",
+              "features/progress-tracking"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/database-schema",
+              "architecture/security"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/auth",
+              "api/routines",
+              "api/sessions",
+              "api/exercises",
+              "api/users",
+              "api/statistics"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "JWT-based authentication with bcrypt password hashing",
+    "CRUD for personalized workout routines with soft-delete",
+    "Live training sessions with per-set weight/reps input and auto-save",
+    "Catalog of 64 exercises with images and looping MP4 videos via AscendAPI",
+    "Progress charts (weekly volume, max weight per exercise) powered by Chart.js",
+    "Personal records (PRs) statistics endpoint",
+    "Password recovery via email with Nodemailer and time-limited reset tokens",
+    "User profile with avatar upload (Multer), biometric data (weight, height, age)",
+    "Recommended routines seeded from scraped data (strengthlevel.es)",
+    "Rest timer with countdown, sound, and vibration between sets",
+    "Interactive onboarding tours for new feature discovery",
+    "Rate limiting on auth endpoints and security headers via Helmet"
+  ],
+  "publicApiSurface": [
+    "POST /api/auth/register",
+    "POST /api/auth/login",
+    "POST /api/auth/forgot-password",
+    "POST /api/auth/reset-password",
+    "GET /api/rutinas",
+    "POST /api/rutinas/crear",
+    "GET /api/rutinas/:id",
+    "PUT /api/rutinas/:id",
+    "DELETE /api/rutinas/:id",
+    "GET /api/sesiones",
+    "POST /api/sesiones",
+    "GET /api/sesiones/ultima/:rutina_id",
+    "GET /api/sesiones/:id",
+    "GET /api/ejercicios",
+    "GET /api/usuarios/me",
+    "PUT /api/usuarios/me",
+    "DELETE /api/usuarios/me",
+    "POST /api/usuarios/avatar",
+    "PUT /api/usuarios/contrasena",
+    "POST /api/usuarios/onboarding",
+    "GET /api/usuarios/perfil",
+    "PATCH /api/usuarios/perfil",
+    "GET /api/estadisticas/prs",
+    "GET /api/health"
+  ]
+}

@@ -1,0 +1,289 @@
+---
+title: "Recording and Reviewing Training Sessions in Blackterz"
+sidebarTitle: "Training Sessions"
+description: "Log every workout with per-set weight, reps, and completion data. Sessions are saved atomically across 3 tables with full history and progressive overload support."
+---
+
+A training session in Blackterz is a complete snapshot of one workout: which routine was used, which exercises were performed, and the exact weight, reps, and completion status of every individual set. Sessions are written to three database tables in a single SQL transaction so a partial write can never occur. Once saved, sessions are permanent — they cannot be edited or deleted — forming a reliable training history.
+
+## Starting a Session (Frontend Flow)
+
+The Blackterz frontend pre-fills the training form from the routine's planned data before the user touches a single input.
+
+<Steps>
+  <Step title="Load routine exercises">
+    When the user selects a routine, `GET /api/rutinas/:id` returns the routine with its full nested exercises array. The frontend renders a card per exercise, each with one input row per planned set.
+  </Step>
+  <Step title="Pre-fill from last session">
+    `GET /api/sesiones/ultima/:rutina_id` is called immediately after loading the routine. If a previous session exists, each set row shows the previous weight and reps in a grey hint span (`anterior-valor`) — the foundation of progressive overload.
+  </Step>
+  <Step title="User edits and checks sets">
+    The user updates weights and reps freely, checks each set as completed, and can add extra exercises or additional set rows at any time without modifying the base routine.
+  </Step>
+  <Step title="Auto-save draft to localStorage">
+    Every input change, checkbox toggle, and set addition triggers `guardarEstadoEntrenamiento()`, which serializes the entire session state to `localStorage` under the key `entrenamiento_draft`. If the browser is closed or the page is refreshed, the session is fully restored on next load via `restaurarEstadoEntrenamiento()`.
+  </Step>
+  <Step title="Finalize and POST">
+    The user taps **Finalizar Entrenamiento**. The frontend traverses the DOM, collects only the checked sets, and POSTs to `POST /api/sesiones`.
+  </Step>
+</Steps>
+
+<Tip>
+  Each exercise card has a configurable **rest timer**. The input accepts 5–300 seconds (default 60 s). As soon as a set is marked complete, the countdown starts automatically. A separate timer runs per card so two exercises can countdown simultaneously.
+</Tip>
+
+---
+
+## Recording a Session
+
+`POST /api/sesiones` is the core write endpoint. The controller extracts `usuario_id` from the JWT (never from the body) and validates the payload before handing it to the model.
+
+### Anti-spoofing
+
+```js
+// The controller overwrites any usuario_id the client sent:
+datosSesion.usuario_id = req.usuario.usuario_id;
+```
+
+Even if the request body contains a different `usuario_id`, the model only ever sees the one from the verified JWT.
+
+### Request body
+
+<ParamField body="rutina_id" type="number" required>
+  ID of the routine this session is based on.
+</ParamField>
+
+<ParamField body="fecha" type="string" required>
+  Date of the workout in `YYYY-MM-DD` format.
+</ParamField>
+
+<ParamField body="notas" type="string">
+  Optional free-text notes for the overall session.
+</ParamField>
+
+<ParamField body="duracion_minutos" type="number">
+  Total session duration in minutes, recorded by the in-app stopwatch.
+</ParamField>
+
+<ParamField body="ejercicios" type="array" required>
+  Array of exercise objects. Must contain at least one item.
+</ParamField>
+
+<ParamField body="ejercicios[].ejercicio_id" type="number" required>
+  ID of the exercise from the catalog.
+</ParamField>
+
+<ParamField body="ejercicios[].notas" type="string">
+  Per-exercise notes (e.g. "Keep elbow tucked").
+</ParamField>
+
+<ParamField body="ejercicios[].series" type="array" required>
+  Array of set objects. Must contain at least one item.
+</ParamField>
+
+<ParamField body="ejercicios[].series[].numero_serie" type="number" required>
+  Set number (1-indexed).
+</ParamField>
+
+<ParamField body="ejercicios[].series[].repeticiones" type="number" required>
+  Repetitions performed in this set.
+</ParamField>
+
+<ParamField body="ejercicios[].series[].peso" type="number">
+  Weight in kilograms. Defaults to `0` if omitted.
+</ParamField>
+
+<ParamField body="ejercicios[].series[].completada" type="boolean">
+  Whether the set was marked as completed by the user.
+</ParamField>
+
+### Sample request body
+
+```json
+{
+  "rutina_id": 3,
+  "fecha": "2026-06-15",
+  "notas": "Buena sesión, aumenté peso en press",
+  "duracion_minutos": 52,
+  "ejercicios": [
+    {
+      "ejercicio_id": 4,
+      "notas": "Mantener escápulas retraídas",
+      "series": [
+        { "numero_serie": 1, "repeticiones": 10, "peso": 60, "completada": true },
+        { "numero_serie": 2, "repeticiones": 10, "peso": 62.5, "completada": true },
+        { "numero_serie": 3, "repeticiones": 8, "peso": 65, "completada": true }
+      ]
+    },
+    {
+      "ejercicio_id": 12,
+      "notas": "",
+      "series": [
+        { "numero_serie": 1, "repeticiones": 12, "peso": 40, "completada": true },
+        { "numero_serie": 2, "repeticiones": 10, "peso": 42.5, "completada": false }
+      ]
+    }
+  ]
+}
+```
+
+```json Response (201)
+{
+  "status": "ok",
+  "message": "Sesión guardada exitosamente",
+  "data": {
+    "sesionId": 18
+  }
+}
+```
+
+---
+
+## The 3-Table Atomic Transaction
+
+The model `guardarSesionCompleta` uses `pool.getConnection()` + `beginTransaction / commit / rollback` to guarantee that all three writes succeed or none of them persist.
+
+<Accordion title="Transaction flow — sesionModel.js">
+
+```js
+const connection = await pool.getConnection();
+try {
+  await connection.beginTransaction();
+
+  // 1. INSERT into sesiones_entrenamiento
+  const [resultadoSesion] = await connection.execute(
+    `INSERT INTO sesiones_entrenamiento (usuario_id, rutina_id, fecha, notas, duracion_minutos)
+     VALUES (?, ?, ?, ?, ?)`,
+    [datosSesion.usuario_id, datosSesion.rutina_id, datosSesion.fecha,
+     datosSesion.notas || null, datosSesion.duracion_minutos || null]
+  );
+  const sesionId = resultadoSesion.insertId;
+
+  for (const ejercicio of datosSesion.ejercicios) {
+    // 2. INSERT into sesion_ejercicios
+    const [resultadoEjercicio] = await connection.execute(
+      `INSERT INTO sesion_ejercicios (sesion_id, ejercicio_id, notas) VALUES (?, ?, ?)`,
+      [sesionId, ejercicio.ejercicio_id, ejercicio.notas || null]
+    );
+    const sesionEjercicioId = resultadoEjercicio.insertId;
+
+    for (const serie of ejercicio.series) {
+      // 3. INSERT into sesion_series
+      await connection.execute(
+        `INSERT INTO sesion_series (sesion_ejercicio_id, numero_serie, repeticiones, peso, completada)
+         VALUES (?, ?, ?, ?, ?)`,
+        [sesionEjercicioId, serie.numero_serie, serie.repeticiones,
+         serie.peso || 0, serie.completada ? 1 : 0]
+      );
+    }
+  }
+
+  await connection.commit();
+  return { sesionId };
+
+} catch (error) {
+  await connection.rollback();
+  throw error;
+} finally {
+  connection.release(); // Always return the connection to the pool
+}
+```
+</Accordion>
+
+<CardGroup cols={3}>
+  <Card title="sesiones_entrenamiento" icon="calendar">
+    One row per workout. Stores `usuario_id`, `rutina_id`, `fecha`, `notas`, and `duracion_minutos`.
+  </Card>
+  <Card title="sesion_ejercicios" icon="list">
+    One row per exercise performed. Foreign key to `sesiones_entrenamiento`. Stores per-exercise `notas`.
+  </Card>
+  <Card title="sesion_series" icon="table">
+    One row per set. Foreign key to `sesion_ejercicios`. Stores `numero_serie`, `repeticiones`, `peso`, and `completada`.
+  </Card>
+</CardGroup>
+
+---
+
+## Session History
+
+`GET /api/sesiones` returns all training sessions for the authenticated user, ordered by date descending. This powers the history table on the profile page.
+
+```bash
+curl http://localhost:3000/api/sesiones \
+  -H "Authorization: Bearer <token>"
+```
+
+```json
+{
+  "status": "ok",
+  "data": [
+    {
+      "id": 18,
+      "fecha": "2026-06-15T00:00:00.000Z",
+      "notas": "Buena sesión",
+      "duracion_minutos": 52,
+      "created_at": "2026-06-15T21:30:00.000Z",
+      "rutina_nombre": "Push Day",
+      "volumen_total_kg": 1855,
+      "total_series": 5
+    }
+  ]
+}
+```
+
+<ResponseField name="volumen_total_kg" type="number">
+  Sum of `peso × repeticiones` for all **completed** sets in the session. Used for the weekly volume chart.
+</ResponseField>
+
+<ResponseField name="total_series" type="number">
+  Count of completed sets across all exercises in the session.
+</ResponseField>
+
+---
+
+## Session Detail
+
+`GET /api/sesiones/:id` returns the full hierarchical detail of a single session — all exercises and all sets. If the session does not belong to the authenticated user, the server returns `404` (not `403`) to avoid revealing that the session ID exists.
+
+```bash
+curl http://localhost:3000/api/sesiones/18 \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## Last Session for Progressive Overload
+
+`GET /api/sesiones/ultima/:rutina_id` finds the most recent session for a given routine and returns the series grouped by `ejercicio_id`. The frontend uses this to pre-fill weight inputs and show grey hint values before a new workout begins.
+
+```bash
+curl http://localhost:3000/api/sesiones/ultima/3 \
+  -H "Authorization: Bearer <token>"
+```
+
+```json
+{
+  "status": "ok",
+  "data": {
+    "sesionId": 17,
+    "ejercicios": {
+      "4": [
+        { "peso": "60.00", "repeticiones": 10 },
+        { "peso": "62.50", "repeticiones": 10 },
+        { "peso": "65.00", "repeticiones": 8 }
+      ],
+      "12": [
+        { "peso": "40.00", "repeticiones": 12 }
+      ]
+    }
+  }
+}
+```
+
+If no previous session exists for the routine, `data` is `null` and a `message` field explains why — the frontend silently skips the hint injection.
+
+---
+
+<Card title="API Reference — Sessions" icon="code" href="/api/sessions">
+  View full request/response schemas, error codes, and live playground for all `/api/sesiones` endpoints.
+</Card>

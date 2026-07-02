@@ -1,0 +1,392 @@
+---
+title: "Routines API: CRUD Endpoints for Workout Routines"
+sidebarTitle: "Routines"
+description: "Create, read, update, and delete personalized workout routines. Each user may have up to 4 active routines. All endpoints require a valid JWT."
+---
+
+The Routines API manages the workout routines that belong to the authenticated user. Each routine holds a list of exercises drawn from the global exercise catalog and can be updated at any time. Deleting a routine is non-destructive — it is soft-deleted by setting `activa = FALSE`, so training history linked to it is never lost.
+
+<Note>
+  Every endpoint in this group requires a valid JWT passed as `Authorization: Bearer <token>`. The `usuario_id` is **always extracted from the token** — any `usuario_id` value in the request body is silently ignored. This prevents ID spoofing.
+</Note>
+
+---
+
+## GET /api/rutinas
+
+<span className="text-sm font-semibold text-blue-500">GET</span> `/api/rutinas`
+
+Returns all **active** routines owned by the authenticated user, ordered by creation date descending. Each entry includes a precomputed `total_ejercicios` count so the frontend can display a summary card without fetching each routine individually.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+### Responses
+
+<Accordion title="200 OK — Routines retrieved">
+  <ResponseField name="status" type="string">
+    `"ok"`
+  </ResponseField>
+  <ResponseField name="data" type="array">
+    Array of routine summary objects.
+    <Expandable title="Routine object fields">
+      <ResponseField name="id" type="number">Routine primary key.</ResponseField>
+      <ResponseField name="nombre" type="string">Routine name.</ResponseField>
+      <ResponseField name="descripcion" type="string | null">Optional description.</ResponseField>
+      <ResponseField name="created_at" type="string">ISO 8601 creation timestamp.</ResponseField>
+      <ResponseField name="es_recomendada" type="boolean">Whether this is a system-recommended routine rather than user-created.</ResponseField>
+      <ResponseField name="total_ejercicios" type="number">Total number of exercises assigned to this routine.</ResponseField>
+    </Expandable>
+  </ResponseField>
+</Accordion>
+
+<Accordion title="401 Unauthorized — Missing or invalid token">
+  ```json
+  { "status": "error", "message": "Token no proporcionado" }
+  ```
+</Accordion>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl https://your-api.com/api/rutinas \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+```json Response
+{
+  "status": "ok",
+  "data": [
+    {
+      "id": 3,
+      "nombre": "Full Body",
+      "descripcion": "Entrenamiento completo para 3 días",
+      "created_at": "2025-06-01T14:22:00.000Z",
+      "es_recomendada": false,
+      "total_ejercicios": 6
+    }
+  ]
+}
+```
+</CodeGroup>
+
+---
+
+## POST /api/rutinas/crear
+
+<span className="text-sm font-semibold text-green-500">POST</span> `/api/rutinas/crear`
+
+Creates a new personalized routine for the authenticated user. An optional array of exercise IDs can be provided to assign exercises at creation time.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+<Note>
+  Each user is limited to **4 active routines**. The count is checked at the moment of each creation request to eliminate race conditions between concurrent tabs or sessions. If the limit is already reached, the server returns `403 Forbidden` regardless of how the request was formed.
+</Note>
+
+### Request body
+
+<ParamField body="nombre" type="string" required>
+  Name of the new routine (e.g., `"Pull Day"`). Must be a non-empty string.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Optional free-text description of the routine's purpose or structure.
+</ParamField>
+
+<ParamField body="ejercicios_ids" type="array of numbers">
+  Optional list of exercise IDs (from the global catalog) to assign to the routine at creation. IDs are assigned an `orden` value starting at `1`. Non-numeric values are silently filtered out. If omitted, the routine is created with no exercises.
+</ParamField>
+
+### Responses
+
+<Accordion title="201 Created — Routine created">
+  <ResponseField name="status" type="string">`"ok"`</ResponseField>
+  <ResponseField name="message" type="string">`"Rutina creada exitosamente"`</ResponseField>
+  <ResponseField name="data" type="object">
+    <Expandable title="data fields">
+      <ResponseField name="id" type="number">Auto-generated ID of the new routine.</ResponseField>
+      <ResponseField name="nombre" type="string">Routine name as stored.</ResponseField>
+      <ResponseField name="descripcion" type="string | null">Routine description or `null`.</ResponseField>
+      <ResponseField name="usuario_id" type="number">ID of the owning user (from the JWT).</ResponseField>
+    </Expandable>
+  </ResponseField>
+</Accordion>
+
+<Accordion title="400 Bad Request — Missing or invalid name">
+  ```json
+  { "status": "error", "message": "El nombre de la rutina es obligatorio" }
+  ```
+</Accordion>
+
+<Accordion title="403 Forbidden — Routine limit reached">
+  ```json
+  { "status": "error", "message": "Has alcanzado el límite de 4 rutinas personalizadas." }
+  ```
+</Accordion>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-api.com/api/rutinas/crear \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Pull Day",
+    "descripcion": "Espalda y bíceps",
+    "ejercicios_ids": [4, 7, 12]
+  }'
+```
+
+```json Response
+{
+  "status": "ok",
+  "message": "Rutina creada exitosamente",
+  "data": {
+    "id": 5,
+    "nombre": "Pull Day",
+    "descripcion": "Espalda y bíceps",
+    "usuario_id": 42
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## GET /api/rutinas/:id
+
+<span className="text-sm font-semibold text-blue-500">GET</span> `/api/rutinas/:id`
+
+Returns a single routine with its complete, ordered exercise list. Uses a single SQL `LEFT JOIN` across `rutinas`, `ejercicios_rutinas`, and `ejercicios` — one database round-trip regardless of exercise count.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  Numeric ID of the routine to retrieve. Non-numeric values return `400`.
+</ParamField>
+
+### Responses
+
+<Accordion title="200 OK — Routine with exercises">
+  <ResponseField name="status" type="string">`"ok"`</ResponseField>
+  <ResponseField name="data" type="object">
+    <Expandable title="data fields">
+      <ResponseField name="id" type="number">Routine ID.</ResponseField>
+      <ResponseField name="nombre" type="string">Routine name.</ResponseField>
+      <ResponseField name="descripcion" type="string | null">Routine description.</ResponseField>
+      <ResponseField name="ejercicios" type="array">
+        Ordered array of exercises assigned to this routine.
+        <Expandable title="Exercise object fields">
+          <ResponseField name="id" type="number">Exercise ID.</ResponseField>
+          <ResponseField name="nombre" type="string">Exercise name.</ResponseField>
+          <ResponseField name="descripcion" type="string | null">Exercise description.</ResponseField>
+          <ResponseField name="categoria" type="string">Muscle group or category.</ResponseField>
+          <ResponseField name="imagen_url" type="string | null">Static image URL.</ResponseField>
+          <ResponseField name="gif_url" type="string | null">Animated demonstration GIF URL.</ResponseField>
+          <ResponseField name="orden" type="number">Position of this exercise within the routine (1-indexed).</ResponseField>
+          <ResponseField name="series" type="number | null">Recommended number of sets.</ResponseField>
+          <ResponseField name="repeticiones" type="number | null">Recommended rep count per set.</ResponseField>
+          <ResponseField name="peso" type="number | null">Recommended weight in kg.</ResponseField>
+        </Expandable>
+      </ResponseField>
+    </Expandable>
+  </ResponseField>
+</Accordion>
+
+<Accordion title="400 Bad Request — Non-numeric ID">
+  ```json
+  { "status": "error", "message": "El ID de la rutina debe ser un número válido" }
+  ```
+</Accordion>
+
+<Accordion title="404 Not Found — Routine does not exist or does not belong to the user">
+  ```json
+  { "status": "error", "message": "No se encontró la rutina con ID 99" }
+  ```
+</Accordion>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl https://your-api.com/api/rutinas/3 \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+```json Response
+{
+  "status": "ok",
+  "data": {
+    "id": 3,
+    "nombre": "Full Body",
+    "descripcion": "Entrenamiento completo para 3 días",
+    "ejercicios": [
+      {
+        "id": 4,
+        "nombre": "Press de Banca",
+        "descripcion": null,
+        "categoria": "Pecho",
+        "imagen_url": null,
+        "gif_url": "https://cdn.example.com/bench-press.gif",
+        "orden": 1,
+        "series": 4,
+        "repeticiones": 10,
+        "peso": 80
+      }
+    ]
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## PUT /api/rutinas/:id
+
+<span className="text-sm font-semibold text-yellow-500">PUT</span> `/api/rutinas/:id`
+
+Updates the name, description, and exercise list of an existing routine. This is a **full replacement** — the incoming `ejercicios_ids` array completely replaces every exercise currently in the routine. The replacement is performed atomically inside a SQL transaction (DELETE all current entries, then INSERT the new list), so the routine is never left in a partial state.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+<Warning>
+  `ejercicios_ids` is **not a patch**. If you send `[1, 5, 3]`, the routine ends up with exactly those three exercises in that order, regardless of what it contained before. To keep existing exercises, include their IDs in the new array.
+</Warning>
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  Numeric ID of the routine to update.
+</ParamField>
+
+### Request body
+
+<ParamField body="nombre" type="string" required>
+  Updated routine name. Cannot be empty.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Updated description. Pass `null` or omit to clear.
+</ParamField>
+
+<ParamField body="ejercicios_ids" type="array of numbers">
+  Ordered list of exercise IDs that will **replace** the routine's current exercise list entirely. At least one valid numeric ID is required. Invalid (non-numeric) entries are silently skipped.
+</ParamField>
+
+### Responses
+
+<Accordion title="200 OK — Routine updated">
+  Returns the full updated routine object, re-read from the database after the update.
+
+  <ResponseField name="status" type="string">`"ok"`</ResponseField>
+  <ResponseField name="message" type="string">`"Rutina actualizada exitosamente"`</ResponseField>
+  <ResponseField name="data" type="object">
+    Same shape as `GET /api/rutinas/:id` — the updated routine with its full exercise list.
+  </ResponseField>
+</Accordion>
+
+<Accordion title="400 Bad Request — Missing name or invalid ID">
+  ```json
+  { "status": "error", "message": "El nombre de la rutina es obligatorio" }
+  { "status": "error", "message": "El ID de la rutina debe ser un número válido" }
+  ```
+</Accordion>
+
+<Accordion title="404 Not Found — Routine not found or not owned by the user">
+  ```json
+  { "status": "error", "message": "Rutina no encontrada o no tienes permiso para editarla" }
+  ```
+</Accordion>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X PUT https://your-api.com/api/rutinas/3 \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Full Body v2",
+    "descripcion": "Actualizado con más volumen",
+    "ejercicios_ids": [4, 7, 2, 9]
+  }'
+```
+
+```json Response
+{
+  "status": "ok",
+  "message": "Rutina actualizada exitosamente",
+  "data": {
+    "id": 3,
+    "nombre": "Full Body v2",
+    "descripcion": "Actualizado con más volumen",
+    "ejercicios": [
+      { "id": 4, "nombre": "Press de Banca", "orden": 1, "series": null, "repeticiones": null, "peso": null },
+      { "id": 7, "nombre": "Sentadilla", "orden": 2, "series": null, "repeticiones": null, "peso": null },
+      { "id": 2, "nombre": "Dominadas", "orden": 3, "series": null, "repeticiones": null, "peso": null },
+      { "id": 9, "nombre": "Peso Muerto", "orden": 4, "series": null, "repeticiones": null, "peso": null }
+    ]
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## DELETE /api/rutinas/:id
+
+<span className="text-sm font-semibold text-red-500">DELETE</span> `/api/rutinas/:id`
+
+Soft-deletes a routine by setting its `activa` column to `FALSE`. The row is **not removed** from the database. All training sessions that reference this routine remain intact and fully queryable — only the routine itself disappears from the user's active list.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+<Note>
+  Because deletion is non-destructive, a soft-deleted routine frees up one slot toward the 4-routine limit, allowing the user to create a new one.
+</Note>
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  Numeric ID of the routine to deactivate.
+</ParamField>
+
+### Responses
+
+<Accordion title="200 OK — Routine deactivated">
+  ```json
+  { "status": "ok", "message": "Rutina desactivada correctamente" }
+  ```
+</Accordion>
+
+<Accordion title="400 Bad Request — Non-numeric ID">
+  ```json
+  { "status": "error", "message": "El ID de la rutina debe ser un número válido" }
+  ```
+</Accordion>
+
+<Accordion title="404 Not Found — Routine not found or already deactivated">
+  ```json
+  { "status": "error", "message": "Rutina no encontrada" }
+  ```
+</Accordion>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X DELETE https://your-api.com/api/rutinas/3 \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+```json Response
+{
+  "status": "ok",
+  "message": "Rutina desactivada correctamente"
+}
+```
+</CodeGroup>

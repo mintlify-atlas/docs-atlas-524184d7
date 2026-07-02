@@ -1,0 +1,320 @@
+---
+title: "Auth API: Register, Login, Password Reset Endpoints"
+sidebarTitle: "Auth"
+description: "Authenticate users, create accounts, and recover passwords. JWTs are signed with HS256 and expire after 7 days. Reset tokens expire in 1 hour."
+---
+
+The Auth API handles every step of the user identity lifecycle: account creation, credential verification, and secure password recovery via email. All tokens are JSON Web Tokens signed server-side with `HS256`. Passwords are never stored in plain text — bcrypt is used with 10 salt rounds before any password reaches the database.
+
+<Note>
+  The `/register` and `/login` endpoints are rate-limited at the Express router level. Exceeding the limit returns `429 Too Many Requests`.
+</Note>
+
+---
+
+## POST /api/auth/register
+
+<span className="text-sm font-semibold text-green-500">POST</span> `/api/auth/register`
+
+Creates a new user account. On success, returns a signed JWT alongside the new user's public profile. The password is hashed with bcrypt (10 rounds) before being stored — the plain-text value never touches the database.
+
+**Auth required:** No
+
+### Request body
+
+<ParamField body="nombre" type="string" required>
+  Full display name for the new account. Cannot be blank.
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  Valid email address. Must be unique across all registered accounts. Validated against the pattern `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Plain-text password. Must be **at least 6 characters**. The server hashes this with bcrypt before storing.
+</ParamField>
+
+### Responses
+
+<Accordion title="201 Created — Account registered successfully">
+  <ResponseField name="status" type="string">
+    Always `"ok"` on success.
+  </ResponseField>
+  <ResponseField name="message" type="string">
+    Human-readable confirmation: `"Usuario registrado exitosamente"`.
+  </ResponseField>
+  <ResponseField name="data" type="object">
+    <Expandable title="data fields">
+      <ResponseField name="id" type="number">
+        Auto-incremented primary key of the newly created user.
+      </ResponseField>
+      <ResponseField name="nombre" type="string">
+        The display name provided in the request body.
+      </ResponseField>
+      <ResponseField name="email" type="string">
+        The email address provided in the request body.
+      </ResponseField>
+    </Expandable>
+  </ResponseField>
+</Accordion>
+
+<Accordion title="400 Bad Request — Validation failure">
+  Returned when required fields are missing, the email format is invalid, or the password is shorter than 6 characters.
+
+  ```json
+  { "status": "error", "message": "Los campos nombre, email y password son requeridos" }
+  { "status": "error", "message": "Formato de email inválido" }
+  { "status": "error", "message": "La contraseña debe tener al menos 6 caracteres" }
+  ```
+</Accordion>
+
+<Accordion title="409 Conflict — Email already registered">
+  ```json
+  { "status": "error", "message": "El email ya está registrado" }
+  ```
+</Accordion>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-api.com/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Alex Ramos",
+    "email": "alex@example.com",
+    "password": "strongPass1"
+  }'
+```
+
+```json Response
+{
+  "status": "ok",
+  "message": "Usuario registrado exitosamente",
+  "data": {
+    "id": 42,
+    "nombre": "Alex Ramos",
+    "email": "alex@example.com"
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## POST /api/auth/login
+
+<span className="text-sm font-semibold text-green-500">POST</span> `/api/auth/login`
+
+Authenticates an existing user and returns a signed JWT. The token is valid for **7 days** and must be included in the `Authorization` header of every protected request.
+
+**Auth required:** No
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  Registered email address.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Account password in plain text. Compared server-side using `bcrypt.compare()`.
+</ParamField>
+
+### Responses
+
+<Accordion title="200 OK — Login successful">
+  <ResponseField name="status" type="string">
+    `"ok"`
+  </ResponseField>
+  <ResponseField name="message" type="string">
+    `"Inicio de sesión exitoso"`
+  </ResponseField>
+  <ResponseField name="data" type="object">
+    <Expandable title="data fields">
+      <ResponseField name="token" type="string">
+        Signed JWT. Include as `Authorization: Bearer <token>` on subsequent requests. Expires after 7 days.
+      </ResponseField>
+      <ResponseField name="usuario" type="object">
+        <Expandable title="usuario fields">
+          <ResponseField name="id" type="number">User ID.</ResponseField>
+          <ResponseField name="nombre" type="string">Display name.</ResponseField>
+          <ResponseField name="email" type="string">Email address.</ResponseField>
+        </Expandable>
+      </ResponseField>
+    </Expandable>
+  </ResponseField>
+</Accordion>
+
+<Accordion title="400 Bad Request — Missing fields">
+  ```json
+  { "status": "error", "message": "Los campos email y password son requeridos" }
+  ```
+</Accordion>
+
+<Accordion title="401 Unauthorized — Wrong credentials">
+  Returned when the email is not found or the password does not match. The message is intentionally generic to prevent user enumeration.
+
+  ```json
+  { "status": "error", "message": "Credenciales inválidas" }
+  ```
+</Accordion>
+
+<Accordion title="403 Forbidden — Account deactivated">
+  The credentials are correct but the account has been soft-deleted (`activo = FALSE`).
+
+  ```json
+  { "status": "error", "message": "Esta cuenta ha sido desactivada" }
+  ```
+</Accordion>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-api.com/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "alex@example.com",
+    "password": "strongPass1"
+  }'
+```
+
+```json Response
+{
+  "status": "ok",
+  "message": "Inicio de sesión exitoso",
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "usuario": {
+      "id": 42,
+      "nombre": "Alex Ramos",
+      "email": "alex@example.com"
+    }
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## POST /api/auth/forgot-password
+
+<span className="text-sm font-semibold text-green-500">POST</span> `/api/auth/forgot-password`
+
+Initiates the password-reset flow. If the submitted email belongs to an active account, a reset link is sent via email. The server **always returns the same success response** regardless of whether the email is registered — this prevents user enumeration attacks.
+
+**Auth required:** No
+
+<Note>
+  The reset token is generated with `crypto.randomBytes(32)` (64 hex characters) and expires **1 hour** after issuance. Only one valid token exists per user at a time.
+</Note>
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The email address associated with the account to recover.
+</ParamField>
+
+### Responses
+
+<Accordion title="200 OK — Request accepted (always)">
+  ```json
+  {
+    "ok": true,
+    "mensaje": "Si el email existe, recibirás un correo con las instrucciones"
+  }
+  ```
+  This response is returned whether or not the email is registered. This is intentional — it prevents an attacker from probing which emails are in the system.
+</Accordion>
+
+<Accordion title="400 Bad Request — Missing email field">
+  ```json
+  { "ok": false, "mensaje": "El email es obligatorio" }
+  ```
+</Accordion>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-api.com/api/auth/forgot-password \
+  -H "Content-Type: application/json" \
+  -d '{ "email": "alex@example.com" }'
+```
+
+```json Response
+{
+  "ok": true,
+  "mensaje": "Si el email existe, recibirás un correo con las instrucciones"
+}
+```
+</CodeGroup>
+
+---
+
+## POST /api/auth/reset-password
+
+<span className="text-sm font-semibold text-green-500">POST</span> `/api/auth/reset-password`
+
+Completes the password-reset flow. Accepts the token delivered via email and the new desired password. If the token is valid and unexpired, the user's password is updated and the token is permanently invalidated so it cannot be reused.
+
+**Auth required:** No
+
+### Request body
+
+<ParamField body="token" type="string" required>
+  The 64-character hex token received in the password-reset email.
+</ParamField>
+
+<ParamField body="passwordNueva" type="string" required>
+  The new plain-text password. Must be **at least 8 characters**. Hashed with bcrypt (10 rounds) before storage.
+</ParamField>
+
+### Responses
+
+<Accordion title="200 OK — Password updated">
+  ```json
+  {
+    "ok": true,
+    "mensaje": "Contraseña actualizada. Ya podés iniciar sesión"
+  }
+  ```
+</Accordion>
+
+<Accordion title="400 Bad Request — Token invalid, expired, or already used">
+  ```json
+  { "ok": false, "mensaje": "El enlace es inválido o ya expiró" }
+  ```
+</Accordion>
+
+<Accordion title="400 Bad Request — Password too short">
+  ```json
+  { "ok": false, "mensaje": "La nueva contraseña debe tener al menos 8 caracteres" }
+  ```
+</Accordion>
+
+<Accordion title="400 Bad Request — Missing fields">
+  ```json
+  { "ok": false, "mensaje": "Token y nueva contraseña son obligatorios" }
+  ```
+</Accordion>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-api.com/api/auth/reset-password \
+  -H "Content-Type: application/json" \
+  -d '{
+    "token": "a3f2e1d4c5b6a7f8...",
+    "passwordNueva": "newSecurePass99"
+  }'
+```
+
+```json Response
+{
+  "ok": true,
+  "mensaje": "Contraseña actualizada. Ya podés iniciar sesión"
+}
+```
+</CodeGroup>

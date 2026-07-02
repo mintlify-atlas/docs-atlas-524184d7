@@ -1,0 +1,232 @@
+---
+title: "Blackterz Architecture: MVC Backend + Static Frontend"
+sidebarTitle: "Overview"
+description: "How Blackterz separates concerns across three strict MVC layers, pools MySQL connections, serves a Vanilla JS frontend, and guards the test entry point."
+---
+
+Blackterz is a Node.js + Express REST API that follows a strict three-layer MVC pattern. Every HTTP request flows through a predictable chain — from route registration to controller logic to a SQL-only model — with a Vanilla JS frontend served as static files from the same Express process. Understanding how each layer is defined, and what it is explicitly forbidden from doing, is the fastest way to navigate the codebase.
+
+## Project File Structure
+
+```
+Proyecto_Blackterz/
+├── .env                          ← Environment variables (never committed)
+├── .env.example                  ← Template for required variables
+├── package.json
+├── seed.sql                      ← 64 exercises + 15 muscle groups
+├── docs/
+│   ├── GUIA-TECNICA.md
+│   ├── esquema-dbdiagram.txt
+│   └── migracion-*.sql           ← Incremental schema migrations
+├── public/                       ← Static frontend (served by express.static)
+│   ├── index.html
+│   ├── styles.css
+│   ├── app.js
+│   └── images/
+│       ├── *.avif                ← 64 exercise images
+│       └── avatars/              ← User-uploaded profile photos
+└── src/
+    ├── server.js                 ← Entry point: middlewares + routes + listener
+    ├── config/
+    │   └── db.js                 ← mysql2/promise connection pool
+    ├── middlewares/
+    │   └── authMiddleware.js     ← JWT verification (verificarToken)
+    ├── models/                   ← SQL queries and data transformation only
+    │   ├── authModel.js
+    │   ├── rutinaModel.js
+    │   ├── sesionModel.js
+    │   ├── ejercicioModel.js
+    │   └── usuarioModel.js
+    ├── controllers/              ← HTTP logic, validation, response shaping
+    │   ├── authController.js
+    │   ├── rutinaController.js
+    │   ├── sesionController.js
+    │   ├── ejercicioController.js
+    │   └── usuarioController.js
+    └── routes/                   ← URL-to-controller mapping only
+        ├── health.js
+        ├── authRoutes.js
+        ├── rutinaRoutes.js
+        ├── sesionRoutes.js
+        ├── ejercicioRoutes.js
+        └── usuarioRoutes.js
+```
+
+## The Three MVC Layers
+
+The architecture enforces a single responsibility per layer. No layer is permitted to perform the work of another.
+
+<CardGroup cols={3}>
+  <Card title="Routes" icon="route">
+    Map a URL + HTTP verb to exactly one controller function. Contain zero logic — just `router.get('/:id', verificarToken, getById)`.
+  </Card>
+  <Card title="Controllers" icon="sliders">
+    Parse and validate `req`, call one or more model functions, shape the JSON response with the correct HTTP status code.
+  </Card>
+  <Card title="Models" icon="database">
+    Execute parameterized SQL against the connection pool. Transform tabular `rows[]` results into nested JavaScript objects. Know nothing about HTTP.
+  </Card>
+</CardGroup>
+
+<Note>
+  The model layer is the only place that imports `pool` from `src/config/db.js`. If you see a SQL string anywhere outside `src/models/`, that is a bug.
+</Note>
+
+## Request Lifecycle
+
+Every incoming request traverses this chain in order. Middlewares execute **before** any route handler is reached.
+
+```
+Client HTTP Request
+        │
+        ▼
+  Express app
+        │
+        ▼
+  helmet()           ← Security headers (X-Frame-Options, HSTS, etc.)
+        │
+        ▼
+  cors()             ← Cross-origin policy
+        │
+        ▼
+  express.json()     ← Parses JSON body → req.body
+        │
+        ▼
+  express.static()   ← Serves public/ (HTML, CSS, JS, images)
+        │
+        ▼
+  authLimiter        ← Rate limit applied only to /api/auth/*
+  (rateLimit)
+        │
+        ▼
+  Route match
+  (e.g. POST /api/sesiones)
+        │
+        ▼
+  verificarToken     ← JWT middleware (protected routes only)
+  (if protected)     ← Attaches req.usuario = { usuario_id, iat, exp }
+        │
+        ▼
+  Controller         ← Validates input, calls model, builds response
+        │
+        ▼
+  Model              ← pool.execute(sql, [params]) → rows[]
+        │
+        ▼
+  MySQL (fitness_app)
+        │
+        ▼
+  res.json({ status, data })
+```
+
+<Tip>
+  The global error-handling middleware at the bottom of `server.js` catches every `next(error)` from any route and returns a consistent `500` JSON shape, so no controller needs its own catch-all.
+</Tip>
+
+## Database Connection Pool
+
+`src/config/db.js` creates a single shared `mysql2/promise` pool that every model imports.
+
+```js
+// src/config/db.js
+const mysql = require('mysql2/promise');
+
+const pool = mysql.createPool({
+  host:     process.env.DB_HOST     || 'localhost',
+  port:     process.env.DB_PORT     || 3306,
+  user:     process.env.DB_USER     || 'root',
+  password: process.env.DB_PASSWORD || '',
+  database: process.env.DB_NAME     || 'blackterz',
+
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+});
+
+module.exports = pool;
+```
+
+<Accordion title="Why a pool instead of a single connection?">
+  A single `mysql.createConnection()` can only process one query at a time. With 20 simultaneous requests, 19 of them queue up behind the first.
+
+  A pool keeps up to `connectionLimit: 10` connections open simultaneously. Incoming requests are distributed across available connections automatically. When all 10 are busy, `waitForConnections: true` holds the request in queue (`queueLimit: 0` means the queue is unbounded) rather than throwing an error. If a connection drops, the pool discards it and creates a fresh one.
+
+  The `mysql2/promise` variant returns Promises natively from `pool.execute()` and `pool.query()`, enabling clean `async/await` syntax throughout the model layer without wrappers.
+</Accordion>
+
+Models use `pool.execute()` for parameterized queries:
+
+```js
+// Parameterized — mysql2 escapes the values, preventing SQL injection
+const [rows] = await pool.execute(
+  'SELECT id, nombre FROM rutinas WHERE usuario_id = ? AND activa = TRUE',
+  [usuarioId]
+);
+```
+
+For transactions (sessions), models call `pool.getConnection()` to acquire a dedicated connection, issue `BEGIN / COMMIT / ROLLBACK`, and release it in the `finally` block.
+
+## Static Frontend Serving
+
+```js
+// src/server.js
+app.use(express.static(path.join(__dirname, '..', 'public'), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.avif')) {
+      res.setHeader('Content-Type', 'image/avif');
+    }
+  },
+}));
+```
+
+Express resolves the `public/` directory relative to `src/server.js`. The custom `setHeaders` callback adds the correct MIME type for `.avif` exercise images, which Node.js does not recognize by default.
+
+Because the frontend is served from the same origin as the API, all `fetch()` calls in `app.js` use relative paths:
+
+```js
+// public/app.js — relative fetch, no port or hostname needed
+const res = await fetch('/api/rutinas', {
+  headers: { Authorization: 'Bearer ' + token },
+});
+```
+
+<CardGroup cols={2}>
+  <Card title="index.html" icon="file-code">
+    Served automatically at `GET /` — Express looks for `index.html` in the static root by convention.
+  </Card>
+  <Card title="avatars/" icon="image">
+    Files uploaded with multer land in `public/images/avatars/`. They are immediately available at `/images/avatars/avatar-{id}.jpg` without any extra route.
+  </Card>
+</CardGroup>
+
+## Test Entry Point Guard
+
+```js
+// src/server.js — last lines
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
+  });
+}
+
+module.exports = app;
+```
+
+`require.main === module` is `true` only when the file is executed directly (`node src/server.js` or `npm start`). When a test file imports the app with `require('../src/server')`, the `app.listen()` call is skipped entirely. The test suite uses `supertest`, which simulates HTTP requests against the Express app object without binding any real port. This means tests run in any environment, including CI, without port conflicts.
+
+<Steps>
+  <Step title="Run the server normally">
+    ```bash
+    node src/server.js
+    # or
+    npm start
+    ```
+    `require.main === module` is true → `app.listen(3000)` is called.
+  </Step>
+  <Step title="Run the test suite">
+    ```bash
+    node --test tests/
+    ```
+    `require.main === module` is false → no port is opened. Supertest drives the app object directly.
+  </Step>
+</Steps>

@@ -1,0 +1,386 @@
+---
+title: "Sessions API: Log and Retrieve Training Sessions"
+sidebarTitle: "Sessions"
+description: "Log full training sessions with per-exercise series data, retrieve session history, and fetch the last session for progressive overload tracking."
+---
+
+The Sessions API records every completed training session for the authenticated user. Each session captures which routine was performed, the date it occurred, and the exact sets and reps logged for every exercise — down to `peso`, `repeticiones`, and `completada` per set. All write operations use atomic SQL transactions so session data is always consistent.
+
+<Note>
+  All endpoints require a valid JWT in the `Authorization: Bearer <token>` header. The `usuario_id` is extracted exclusively from the token payload — any `usuario_id` sent in the request body is overwritten before it reaches the database. This prevents ID spoofing.
+</Note>
+
+---
+
+## GET /api/sesiones
+
+<span className="text-sm font-semibold text-blue-500">GET</span> `/api/sesiones`
+
+Returns the full training history for the authenticated user, ordered by `fecha DESC` then `id DESC` so the most recent session always appears first. Each item includes aggregate stats (`volumen_total_kg`, `total_series`) computed directly in SQL.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+### Responses
+
+<Accordion title="200 OK — History retrieved">
+  <ResponseField name="status" type="string">`"ok"`</ResponseField>
+  <ResponseField name="data" type="array">
+    Array of session summary objects, ordered newest first.
+    <Expandable title="Session summary fields">
+      <ResponseField name="id" type="number">Session primary key.</ResponseField>
+      <ResponseField name="fecha" type="string">Training date (`YYYY-MM-DD`).</ResponseField>
+      <ResponseField name="notas" type="string | null">Optional session notes.</ResponseField>
+      <ResponseField name="duracion_minutos" type="number | null">Session duration in minutes, if recorded.</ResponseField>
+      <ResponseField name="created_at" type="string">ISO 8601 timestamp of when the record was created.</ResponseField>
+      <ResponseField name="rutina_nombre" type="string | null">Name of the routine used. `null` if the routine was subsequently deleted.</ResponseField>
+      <ResponseField name="volumen_total_kg" type="number">Sum of `peso × repeticiones` across all completed sets in this session.</ResponseField>
+      <ResponseField name="total_series" type="number">Count of completed sets logged in this session.</ResponseField>
+    </Expandable>
+  </ResponseField>
+</Accordion>
+
+<Accordion title="401 Unauthorized — Missing or invalid token">
+  ```json
+  { "status": "error", "message": "Token no proporcionado" }
+  ```
+</Accordion>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl https://your-api.com/api/sesiones \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+```json Response
+{
+  "status": "ok",
+  "data": [
+    {
+      "id": 17,
+      "fecha": "2025-06-10",
+      "notas": "Buena sesión",
+      "duracion_minutos": 52,
+      "created_at": "2025-06-10T20:15:00.000Z",
+      "rutina_nombre": "Full Body",
+      "volumen_total_kg": 3840,
+      "total_series": 16
+    }
+  ]
+}
+```
+</CodeGroup>
+
+---
+
+## POST /api/sesiones
+
+<span className="text-sm font-semibold text-green-500">POST</span> `/api/sesiones`
+
+Logs a complete training session. The request must include the routine used, the date, and a nested structure of exercises with their individual sets. All three INSERT statements (into `sesiones_entrenamiento`, `sesion_ejercicios`, and `sesion_series`) execute inside a single SQL transaction — if any step fails, the entire session is rolled back.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+<Note>
+  The SQL transaction guarantees atomicity: either all three layers of data (session header, exercise entries, and individual series) are committed together, or none of them are. A server crash mid-write will never leave orphaned rows in `sesion_ejercicios` or `sesion_series`.
+</Note>
+
+### Request body
+
+<ParamField body="rutina_id" type="number" required>
+  ID of the routine performed during this session. Must reference an existing routine.
+</ParamField>
+
+<ParamField body="fecha" type="string" required>
+  Date of the training session in `YYYY-MM-DD` format (e.g., `"2025-01-15"`).
+</ParamField>
+
+<ParamField body="notas" type="string">
+  Optional free-text notes about the session (e.g., `"Felt strong today"`).
+</ParamField>
+
+<ParamField body="duracion_minutos" type="number">
+  Optional total session duration in minutes.
+</ParamField>
+
+<ParamField body="ejercicios" type="array" required>
+  Array of exercise entries. Must contain at least one item. Each item must include an `ejercicio_id` and at least one set in `series`.
+
+  <Expandable title="Exercise entry fields">
+    <ParamField body="ejercicio_id" type="number" required>
+      ID of the exercise from the global catalog.
+    </ParamField>
+    <ParamField body="notas" type="string">
+      Optional per-exercise notes (e.g., `"Shoulder pain on last set"`).
+    </ParamField>
+    <ParamField body="series" type="array" required>
+      Array of set entries. Must contain at least one item.
+      <Expandable title="Set (serie) fields">
+        <ParamField body="numero_serie" type="number" required>
+          Set number within this exercise (e.g., `1`, `2`, `3`).
+        </ParamField>
+        <ParamField body="repeticiones" type="number" required>
+          Number of repetitions performed in this set.
+        </ParamField>
+        <ParamField body="peso" type="number">
+          Weight in kg for this set. Defaults to `0` if omitted.
+        </ParamField>
+        <ParamField body="completada" type="boolean">
+          Whether this set was completed. Defaults to `false` if omitted.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Responses
+
+<Accordion title="201 Created — Session logged">
+  <ResponseField name="status" type="string">`"ok"`</ResponseField>
+  <ResponseField name="message" type="string">`"Sesión guardada exitosamente"`</ResponseField>
+  <ResponseField name="data" type="object">
+    <Expandable title="data fields">
+      <ResponseField name="sesionId" type="number">
+        Auto-incremented ID of the newly created session.
+      </ResponseField>
+    </Expandable>
+  </ResponseField>
+</Accordion>
+
+<Accordion title="400 Bad Request — Validation failures">
+  ```json
+  { "status": "error", "message": "El campo rutina_id es requerido" }
+  { "status": "error", "message": "El campo fecha es requerido" }
+  { "status": "error", "message": "Debe incluir al menos un ejercicio en el array ejercicios" }
+  { "status": "error", "message": "El ejercicio en la posición 0 debe tener un ejercicio_id" }
+  { "status": "error", "message": "El ejercicio 4 debe incluir al menos una serie" }
+  ```
+</Accordion>
+
+<Accordion title="400 Bad Request — Foreign key violation">
+  ```json
+  { "status": "error", "message": "El usuario o la rutina especificada no existe" }
+  ```
+</Accordion>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-api.com/api/sesiones \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rutina_id": 1,
+    "fecha": "2025-01-15",
+    "notas": "Buena sesión, PR en press banca",
+    "duracion_minutos": 60,
+    "ejercicios": [
+      {
+        "ejercicio_id": 4,
+        "series": [
+          { "numero_serie": 1, "repeticiones": 10, "peso": 80, "completada": true },
+          { "numero_serie": 2, "repeticiones": 8,  "peso": 85, "completada": true },
+          { "numero_serie": 3, "repeticiones": 7,  "peso": 85, "completada": true }
+        ]
+      }
+    ]
+  }'
+```
+
+```json Response
+{
+  "status": "ok",
+  "message": "Sesión guardada exitosamente",
+  "data": {
+    "sesionId": 18
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## GET /api/sesiones/ultima/:rutina_id
+
+<span className="text-sm font-semibold text-blue-500">GET</span> `/api/sesiones/ultima/:rutina_id`
+
+Retrieves the most recent training session the authenticated user has completed for a specific routine, with series data grouped by exercise. This endpoint powers the **progressive overload** feature: the frontend reads previous weights and reps and pre-fills the next session's input fields as a reference target.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+<Warning>
+  This route is declared **before** `GET /:id` in the Express router. This ordering is required — if `/:id` were declared first, Express would interpret the literal string `"ultima"` as a session ID, routing the request to the wrong handler. The source already has the correct order; do not rearrange these route definitions.
+</Warning>
+
+### Path parameters
+
+<ParamField path="rutina_id" type="number" required>
+  Numeric ID of the routine to look up the last session for.
+</ParamField>
+
+### Responses
+
+<Accordion title="200 OK — Last session found">
+  <ResponseField name="status" type="string">`"ok"`</ResponseField>
+  <ResponseField name="data" type="object">
+    <Expandable title="data fields">
+      <ResponseField name="sesionId" type="number">ID of the most recent session for this routine.</ResponseField>
+      <ResponseField name="ejercicios" type="object">
+        A keyed object where each key is an `ejercicio_id` (as a string) and each value is an array of set records from that session.
+        <Expandable title="Per-exercise set fields">
+          <ResponseField name="peso" type="number">Weight used in this set (kg).</ResponseField>
+          <ResponseField name="repeticiones" type="number">Repetitions performed.</ResponseField>
+        </Expandable>
+      </ResponseField>
+    </Expandable>
+  </ResponseField>
+</Accordion>
+
+<Accordion title="200 OK — No previous sessions for this routine">
+  When no sessions exist, the server returns `200` with a `null` data payload rather than `404`, so the frontend can distinguish "never trained" from "session not found".
+
+  ```json
+  {
+    "status": "ok",
+    "data": null,
+    "message": "No hay sesiones anteriores para esta rutina"
+  }
+  ```
+</Accordion>
+
+<Accordion title="400 Bad Request — Non-numeric rutina_id">
+  ```json
+  { "status": "error", "message": "ID de rutina inválido" }
+  ```
+</Accordion>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl https://your-api.com/api/sesiones/ultima/1 \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+```json Response
+{
+  "status": "ok",
+  "data": {
+    "sesionId": 17,
+    "ejercicios": {
+      "4": [
+        { "peso": 80, "repeticiones": 10 },
+        { "peso": 85, "repeticiones": 8 },
+        { "peso": 85, "repeticiones": 7 }
+      ],
+      "7": [
+        { "peso": 100, "repeticiones": 5 },
+        { "peso": 100, "repeticiones": 5 }
+      ]
+    }
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## GET /api/sesiones/:id
+
+<span className="text-sm font-semibold text-blue-500">GET</span> `/api/sesiones/:id`
+
+Returns the complete detail of a single training session, including every exercise and every set logged within it. The query joins `sesiones_entrenamiento`, `sesion_ejercicios`, `ejercicios`, and `sesion_series`, then restructures the flat tabular result into a nested JSON object.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  Numeric ID of the session to retrieve.
+</ParamField>
+
+### Responses
+
+<Accordion title="200 OK — Full session detail">
+  <ResponseField name="ok" type="boolean">`true`</ResponseField>
+  <ResponseField name="data" type="object">
+    <Expandable title="Session detail fields">
+      <ResponseField name="id" type="number">Session ID.</ResponseField>
+      <ResponseField name="fecha" type="string">Training date.</ResponseField>
+      <ResponseField name="notas" type="string | null">Session-level notes.</ResponseField>
+      <ResponseField name="duracion_minutos" type="number | null">Session duration in minutes.</ResponseField>
+      <ResponseField name="rutina_nombre" type="string | null">Name of the routine at the time it was performed.</ResponseField>
+      <ResponseField name="ejercicios" type="array">
+        Ordered array of exercises performed in this session.
+        <Expandable title="Exercise entry fields">
+          <ResponseField name="ejercicio_id" type="number">Exercise ID.</ResponseField>
+          <ResponseField name="nombre" type="string">Exercise name.</ResponseField>
+          <ResponseField name="gif_url" type="string | null">Animated GIF URL for reference.</ResponseField>
+          <ResponseField name="imagen_url" type="string | null">Static image URL.</ResponseField>
+          <ResponseField name="notas" type="string | null">Per-exercise notes logged during the session.</ResponseField>
+          <ResponseField name="series" type="array">
+            Array of sets performed for this exercise.
+            <Expandable title="Set fields">
+              <ResponseField name="numero_serie" type="number">Set number (1-indexed).</ResponseField>
+              <ResponseField name="repeticiones" type="number">Reps performed.</ResponseField>
+              <ResponseField name="peso" type="number">Weight used (kg).</ResponseField>
+              <ResponseField name="completada" type="boolean">Whether the set was marked as completed.</ResponseField>
+            </Expandable>
+          </ResponseField>
+        </Expandable>
+      </ResponseField>
+    </Expandable>
+  </ResponseField>
+</Accordion>
+
+<Accordion title="400 Bad Request — Non-numeric ID">
+  ```json
+  { "ok": false, "mensaje": "ID de sesión inválido" }
+  ```
+</Accordion>
+
+<Accordion title="404 Not Found — Session not found or belongs to another user">
+  The server returns `404` in both cases — it does not reveal whether the session exists but belongs to another user.
+
+  ```json
+  { "ok": false, "mensaje": "Sesión no encontrada" }
+  ```
+</Accordion>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl https://your-api.com/api/sesiones/17 \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+```json Response
+{
+  "ok": true,
+  "data": {
+    "id": 17,
+    "fecha": "2025-06-10",
+    "notas": "Buena sesión",
+    "duracion_minutos": 52,
+    "rutina_nombre": "Full Body",
+    "ejercicios": [
+      {
+        "ejercicio_id": 4,
+        "nombre": "Press de Banca",
+        "gif_url": "https://cdn.example.com/bench-press.gif",
+        "imagen_url": null,
+        "notas": null,
+        "series": [
+          { "numero_serie": 1, "repeticiones": 10, "peso": 80, "completada": true },
+          { "numero_serie": 2, "repeticiones": 8,  "peso": 85, "completada": true },
+          { "numero_serie": 3, "repeticiones": 7,  "peso": 85, "completada": false }
+        ]
+      }
+    ]
+  }
+}
+```
+</CodeGroup>

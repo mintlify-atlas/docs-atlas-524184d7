@@ -1,0 +1,173 @@
+---
+title: "Blackterz REST API: Base URL, Auth, and Conventions"
+sidebarTitle: "Overview"
+description: "Base URL, authentication scheme, route groups, request and response conventions, HTTP status codes, and rate limiting for the Blackterz Gym API."
+---
+
+The Blackterz REST API is a Node.js + Express + MySQL backend that powers the Blackterz Gym App. All communication happens over HTTP using JSON. This page covers the base URL, how to authenticate, which route groups exist, and the conventions every response follows.
+
+## Base URL
+
+```
+http://localhost:3000
+```
+
+The port is configurable via the `PORT` environment variable. If `PORT` is not set, the server defaults to `3000`. Every API endpoint is prefixed with `/api`.
+
+<Tip>
+  You can confirm the server is running and the database is reachable at any time by calling `GET /api/health` — no authentication required.
+</Tip>
+
+## Route Groups
+
+<Tabs>
+  <Tab title="Public Routes">
+    | Method | Path | Description |
+    |--------|------|-------------|
+    | `GET` | `/api/health` | Database health check |
+    | `POST` | `/api/auth/register` | Create a new user account |
+    | `POST` | `/api/auth/login` | Authenticate and receive a JWT |
+    | `POST` | `/api/auth/forgot-password` | Request a password reset email |
+    | `POST` | `/api/auth/reset-password` | Set a new password using a reset token |
+  </Tab>
+  <Tab title="Protected Routes">
+    | Prefix | Description |
+    |--------|-------------|
+    | `/api/rutinas/*` | Routine management |
+    | `/api/sesiones/*` | Training sessions |
+    | `/api/ejercicios` | Exercise catalog |
+    | `/api/usuarios/*` | User profile and account |
+    | `/api/estadisticas/*` | Statistics and personal records |
+
+    All protected routes require a valid `Authorization: Bearer <token>` header. Obtain a token by calling `POST /api/auth/login`.
+  </Tab>
+</Tabs>
+
+## Authentication
+
+Protected endpoints verify a **JSON Web Token (JWT)** on every request. The token is issued by `POST /api/auth/login` and is valid for **7 days**.
+
+Include the token in the `Authorization` header using the `Bearer` scheme:
+
+```http
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+<Warning>
+  The JWT payload contains `usuario_id`, `nombre`, and `email`. It is Base64-encoded, not encrypted — never place sensitive data in request or response payloads beyond what is documented here.
+</Warning>
+
+The middleware validates the token on every protected request. Possible rejection responses:
+
+| Scenario | Status | `message` |
+|----------|--------|-----------|
+| No `Authorization` header | `401` | `"Token de acceso requerido"` |
+| Header not in `Bearer <token>` format | `401` | `"Formato de token inválido. Usar: Bearer <token>"` |
+| Token has expired | `401` | `"Token expirado. Iniciá sesión nuevamente"` |
+| Token signature invalid | `401` | `"Token inválido"` |
+
+## Request Format
+
+All endpoints that accept a body expect **JSON** with the appropriate content type header:
+
+```http
+Content-Type: application/json
+```
+
+## Response Format
+
+Every response body is JSON. Success responses include `"status": "ok"` and error responses include `"status": "error"` alongside a `message` field.
+
+<Tabs>
+  <Tab title="Success">
+    ```json
+    {
+      "status": "ok",
+      "message": "Descripción del resultado",
+      "data": { }
+    }
+    ```
+  </Tab>
+  <Tab title="Error">
+    ```json
+    {
+      "status": "error",
+      "message": "Descripción del error"
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## HTTP Status Codes
+
+| Code | Meaning | When It Occurs |
+|------|---------|----------------|
+| `200 OK` | Request succeeded | Successful `GET`, `PUT`, or `DELETE` |
+| `201 Created` | Resource created | Successful `POST` that creates a new record |
+| `400 Bad Request` | Validation error | Missing or invalid fields in the request body |
+| `401 Unauthorized` | Authentication failed | Missing, invalid, or expired JWT |
+| `403 Forbidden` | Authorization denied | Authenticated but not permitted (e.g. account deactivated, routine limit reached, not your resource) |
+| `404 Not Found` | Resource missing | The requested record does not exist |
+| `409 Conflict` | Duplicate resource | Attempting to register an email already in use |
+| `429 Too Many Requests` | Rate limit exceeded | More than the allowed auth attempts in a 15-minute window |
+| `500 Internal Server Error` | Unexpected failure | Unhandled server-side error |
+
+## Rate Limiting
+
+Auth endpoints (`/api/auth/*`) are rate-limited per IP address to prevent brute-force attacks:
+
+| Environment | Limit |
+|-------------|-------|
+| `NODE_ENV=production` | 10 requests per 15 minutes |
+| Development (default) | 100 requests per 15 minutes |
+
+When the limit is exceeded the API returns `429` with the following body:
+
+```json
+{
+  "ok": false,
+  "mensaje": "Demasiados intentos. Esperá 15 minutos e intentá de nuevo."
+}
+```
+
+Standard rate-limit headers (`RateLimit-*`) are included in every auth response.
+
+## Health Check
+
+Verify connectivity to both the server and the MySQL database with a single public endpoint:
+
+<CodeGroup>
+  ```bash curl
+  curl http://localhost:3000/api/health
+  ```
+</CodeGroup>
+
+**Response `200 OK`**
+
+```json
+{ "status": "ok", "db": "conectada" }
+```
+
+## Authenticated Request Example
+
+The following example retrieves the authenticated user's profile. Replace `<token>` with the JWT received from `POST /api/auth/login`.
+
+<CodeGroup>
+  ```bash curl
+  curl -X GET http://localhost:3000/api/usuarios/perfil \
+    -H "Authorization: Bearer <token>" \
+    -H "Content-Type: application/json"
+  ```
+
+  ```javascript JavaScript (fetch)
+  const response = await fetch('http://localhost:3000/api/usuarios/perfil', {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  const data = await response.json();
+  ```
+</CodeGroup>

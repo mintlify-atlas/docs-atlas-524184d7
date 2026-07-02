@@ -1,0 +1,181 @@
+---
+title: "Exercises API: Browse the 64-Exercise Catalog"
+sidebarTitle: "Exercises"
+description: "Retrieve the full 64-exercise strength catalog with muscle groups, images, and animated GIFs. Requires a valid Bearer token."
+---
+
+The Exercises API exposes the entire Blackterz exercise catalog in a single authenticated request. Each exercise object includes its name, category, static image, optional animated GIF, and a list of muscle groups with their role (`principal` or `secundario`). The catalog covers barbell, dumbbell, bodyweight, machine, and cable movements — all categorized under `fuerza` (strength).
+
+---
+
+## GET /api/ejercicios
+
+Returns all 64 exercises in the catalog, ordered alphabetically by name. Each item includes its associated muscle groups, resolved by a SQL `LEFT JOIN` against the `ejercicios_grupos_musculares` and `grupos_musculares` tables.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+<Note>
+  Exercise images are served as static files from the `/images/` path (e.g., `/images/bench-press.avif`). All images use the `.avif` format for optimal compression. The `gif_url` field is only populated when `ASCENDAPI_KEY` is configured in the server environment; if that key is absent, `gif_url` will be `null` for every exercise.
+</Note>
+
+### Request
+
+No query parameters or request body. Authentication is handled entirely by the `Authorization` header.
+
+```bash
+curl -X GET https://api.blackterzgym.com/api/ejercicios \
+  -H "Authorization: Bearer <your_token>"
+```
+
+### Response
+
+<ResponseField name="status" type="string" required>
+  Always `"ok"` on success.
+</ResponseField>
+
+<ResponseField name="data" type="array" required>
+  Array of exercise objects. Ordered alphabetically by `nombre`.
+
+  <Expandable title="Exercise object fields">
+    <ResponseField name="id" type="integer">
+      Unique exercise identifier.
+    </ResponseField>
+
+    <ResponseField name="nombre" type="string">
+      Exercise name in Spanish (e.g., `"Press de banca"`, `"Sentadilla"`).
+    </ResponseField>
+
+    <ResponseField name="descripcion" type="string">
+      Short description of the exercise and its primary equipment type.
+    </ResponseField>
+
+    <ResponseField name="categoria" type="string">
+      Exercise category. Currently all seeded exercises use `"fuerza"` (strength).
+    </ResponseField>
+
+    <ResponseField name="imagen_url" type="string">
+      Filename of the static preview image, e.g. `"bench-press.avif"`. Serve from `/images/<imagen_url>`.
+    </ResponseField>
+
+    <ResponseField name="gif_url" type="string | null">
+      URL to an animated demonstration GIF from the Ascend API. Returns `null` when `ASCENDAPI_KEY` is not set on the server.
+    </ResponseField>
+
+    <ResponseField name="musculos" type="string">
+      Comma-separated list of muscle group names involved in this exercise, ordered alphabetically. Example: `"Glúteos, Isquiotibiales, Trampas"`. Built via SQL `GROUP_CONCAT`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Sample response
+
+```json
+{
+  "status": "ok",
+  "data": [
+    {
+      "id": 32,
+      "nombre": "Abdominales",
+      "descripcion": "Ejercicio de peso corporal para Core.",
+      "categoria": "fuerza",
+      "imagen_url": "crunches.avif",
+      "gif_url": null,
+      "musculos": "Core"
+    },
+    {
+      "id": 33,
+      "nombre": "Abdominales sentado",
+      "descripcion": "Ejercicio de peso corporal para Core.",
+      "categoria": "fuerza",
+      "imagen_url": "sit-ups.avif",
+      "gif_url": null,
+      "musculos": "Core, Flexores Cadera"
+    },
+    {
+      "id": 61,
+      "nombre": "Aductores en máquina",
+      "descripcion": "Ejercicio de máquina para Aductores.",
+      "categoria": "fuerza",
+      "imagen_url": "hip-adduction.avif",
+      "gif_url": null,
+      "musculos": "Aductores"
+    }
+  ]
+}
+```
+
+### Muscle groups reference
+
+The catalog maps exercises to 15 muscle groups. Each association has a `tipo` value of either `principal` (primary mover) or `secundario` (secondary/stabilizer).
+
+<Accordion title="All 15 muscle groups">
+  | ID | Name              |
+  |----|-------------------|
+  | 1  | Hombros           |
+  | 2  | Tríceps           |
+  | 3  | Pecho             |
+  | 4  | Aductores         |
+  | 5  | Antebrazos        |
+  | 6  | Bíceps            |
+  | 7  | Core              |
+  | 8  | Cuádriceps        |
+  | 9  | Espalda Baja      |
+  | 10 | Espalda Media     |
+  | 11 | Flexores Cadera   |
+  | 12 | Gemelos           |
+  | 13 | Glúteos           |
+  | 14 | Isquiotibiales    |
+  | 15 | Trampas           |
+</Accordion>
+
+### Error responses
+
+<Accordion title="500 Internal Server Error">
+  Returned when the database query fails.
+
+  ```json
+  {
+    "status": "error",
+    "message": "Error interno del servidor"
+  }
+  ```
+</Accordion>
+
+<Accordion title="401 Unauthorized">
+  Returned when no token is provided or the token is invalid/expired. Handled by the `verificarToken` middleware before reaching this controller.
+
+  ```json
+  {
+    "status": "error",
+    "message": "Token no válido o expirado"
+  }
+  ```
+</Accordion>
+
+### Full curl example
+
+<CodeGroup>
+```bash cURL
+curl -X GET https://api.blackterzgym.com/api/ejercicios \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+```javascript JavaScript (fetch)
+const res = await fetch('/api/ejercicios', {
+  headers: {
+    Authorization: `Bearer ${token}`,
+  },
+});
+const { status, data } = await res.json();
+```
+
+```python Python (requests)
+import requests
+
+resp = requests.get(
+    'https://api.blackterzgym.com/api/ejercicios',
+    headers={'Authorization': f'Bearer {token}'}
+)
+exercises = resp.json()['data']
+```
+</CodeGroup>

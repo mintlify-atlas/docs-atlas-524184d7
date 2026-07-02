@@ -1,0 +1,206 @@
+---
+title: "Statistics API: Personal Records per Exercise"
+sidebarTitle: "Statistics"
+description: "Retrieve per-exercise personal records (max weight lifted) for the authenticated user, plus a health check endpoint to verify database connectivity."
+---
+
+The Statistics API surfaces two endpoints: a JWT-protected personal records (PRs) endpoint that aggregates each user's historical best performance per exercise, and an unauthenticated health check that verifies the MySQL connection is alive. The PR data is the backbone of the progress charts on the Blackterz frontend dashboard.
+
+---
+
+## GET /api/estadisticas/prs
+
+Returns the personal record — the maximum weight ever lifted — for every exercise the authenticated user has logged at least one completed set on. Only sets where `sesion_series.completada = 1` are considered. Results are ordered by `peso_maximo DESC`.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+The query joins four tables: `sesiones_entrenamiento` → `sesion_ejercicios` → `sesion_series` → `ejercicios`. It groups by exercise and aggregates with `MAX(peso)`.
+
+<Tip>
+  The PR data returned by this endpoint feeds the progress charts displayed on the user's profile dashboard. Poll it after every completed workout session to keep the frontend charts up to date.
+</Tip>
+
+### Request
+
+No query parameters or request body. The `usuario_id` is extracted directly from the JWT by the `verificarToken` middleware.
+
+```bash
+curl -X GET https://api.blackterzgym.com/api/estadisticas/prs \
+  -H "Authorization: Bearer <your_token>"
+```
+
+### Response
+
+<ResponseField name="status" type="string" required>
+  `"ok"` on success.
+</ResponseField>
+
+<ResponseField name="data" type="array" required>
+  Array of personal record objects. One entry per exercise where the user has at least one completed set. Empty array `[]` if the user has no workout history.
+
+  <Expandable title="Personal record object fields">
+    <ResponseField name="ejercicio_id" type="integer">
+      ID of the exercise, matching the `ejercicios.id` primary key.
+    </ResponseField>
+    <ResponseField name="ejercicio_nombre" type="string">
+      Display name of the exercise, e.g. `"Peso muerto"`.
+    </ResponseField>
+    <ResponseField name="peso_maximo" type="number">
+      Maximum weight in kilograms recorded across all completed sets for this exercise.
+    </ResponseField>
+    <ResponseField name="reps_maximas" type="integer">
+      Maximum repetitions recorded in a single completed set for this exercise.
+    </ResponseField>
+    <ResponseField name="veces_entrenado" type="integer">
+      Number of distinct `sesion_ejercicio` entries (unique exercise appearances across sessions) for this exercise.
+    </ResponseField>
+    <ResponseField name="total_series_completadas" type="integer">
+      Total count of completed sets (`completada = 1`) logged for this exercise across all sessions.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Sample response
+
+```json
+{
+  "status": "ok",
+  "data": [
+    {
+      "ejercicio_id": 3,
+      "ejercicio_nombre": "Peso muerto",
+      "peso_maximo": 120,
+      "reps_maximas": 5,
+      "veces_entrenado": 8,
+      "total_series_completadas": 24
+    },
+    {
+      "ejercicio_id": 1,
+      "ejercicio_nombre": "Press de banca",
+      "peso_maximo": 100,
+      "reps_maximas": 8,
+      "veces_entrenado": 12,
+      "total_series_completadas": 36
+    },
+    {
+      "ejercicio_id": 2,
+      "ejercicio_nombre": "Sentadilla",
+      "peso_maximo": 95,
+      "reps_maximas": 6,
+      "veces_entrenado": 10,
+      "total_series_completadas": 30
+    }
+  ]
+}
+```
+
+### Error responses
+
+<Accordion title="500 Internal Server Error">
+  Returned when the SQL query fails.
+
+  ```json
+  {
+    "status": "error",
+    "message": "Error al obtener los récords personales"
+  }
+  ```
+</Accordion>
+
+<Accordion title="401 Unauthorized">
+  Returned when no token or an invalid/expired token is supplied. Raised by the `verificarToken` middleware before the controller runs.
+
+  ```json
+  {
+    "status": "error",
+    "message": "Token no válido o expirado"
+  }
+  ```
+</Accordion>
+
+### Full curl example
+
+<CodeGroup>
+```bash cURL
+curl -X GET https://api.blackterzgym.com/api/estadisticas/prs \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+```javascript JavaScript (fetch)
+const res = await fetch('/api/estadisticas/prs', {
+  headers: { Authorization: `Bearer ${token}` },
+});
+const { status, data } = await res.json();
+// data is an array of PR objects, or [] if no history yet
+```
+
+```python Python (requests)
+import requests
+
+resp = requests.get(
+    'https://api.blackterzgym.com/api/estadisticas/prs',
+    headers={'Authorization': f'Bearer {token}'}
+)
+prs = resp.json()['data']
+```
+</CodeGroup>
+
+---
+
+## GET /api/health
+
+Verifies that the API server is running and that the MySQL database connection is healthy. Executes a lightweight `SELECT 1` query against the pool. No authentication required.
+
+**Auth required:** None
+
+### Response
+
+<Tabs>
+  <Tab title="200 — Healthy">
+    <ResponseField name="status" type="string">
+      `"ok"`
+    </ResponseField>
+    <ResponseField name="db" type="string">
+      `"conectada"` — the `SELECT 1` completed successfully.
+    </ResponseField>
+
+    ```json
+    {
+      "status": "ok",
+      "db": "conectada"
+    }
+    ```
+  </Tab>
+
+  <Tab title="500 — Unhealthy">
+    <ResponseField name="status" type="string">
+      `"error"`
+    </ResponseField>
+    <ResponseField name="db" type="string">
+      `"desconectada"` — MySQL is unreachable or the pool threw an error.
+    </ResponseField>
+
+    ```json
+    {
+      "status": "error",
+      "db": "desconectada"
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Curl example
+
+<CodeGroup>
+```bash cURL
+curl -X GET https://api.blackterzgym.com/api/health
+```
+
+```javascript JavaScript (fetch)
+const res = await fetch('/api/health');
+const { status, db } = await res.json();
+if (db !== 'conectada') {
+  console.error('Database is unreachable');
+}
+```
+</CodeGroup>

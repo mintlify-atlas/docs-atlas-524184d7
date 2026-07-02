@@ -1,0 +1,234 @@
+---
+title: "Progress Tracking, Volume Charts, and Personal Records"
+sidebarTitle: "Progress Tracking"
+description: "Visualize weekly training volume with a Chart.js bar chart and track all-time personal records per exercise. Data is derived from completed sets in sesion_series."
+---
+
+Blackterz offers two complementary progress views built entirely from data already captured during normal training sessions. The **weekly volume chart** gives a macro view of training load over time, while the **personal records (PRs) board** surfaces the best performance ever logged per exercise. Both are derived from the `sesion_series` table and require no additional input from the user.
+
+## Weekly Volume Chart
+
+The profile page renders a Chart.js 4 bar chart showing total training volume per ISO week for the **last 8 weeks**. Volume for each week is the sum of `peso × repeticiones` across all **completed** sets (`completada = 1`) in sessions that fall within that week.
+
+<Steps>
+  <Step title="Fetch session history">
+    `GET /api/sesiones` returns the full history. Each session already includes `volumen_total_kg` — a pre-aggregated sum calculated server-side by the `obtenerHistorialUsuario` query.
+  </Step>
+  <Step title="Group by ISO week">
+    The frontend calculates the Monday of each session's week using:
+
+    ```js
+    const fechaLimpia = sesion.fecha.split('T')[0];
+    const fecha = new Date(fechaLimpia + 'T00:00:00');
+    const diaSemana = fecha.getDay() || 7; // Sunday becomes 7
+    const lunes = new Date(fecha);
+    lunes.setDate(fecha.getDate() - diaSemana + 1);
+    ```
+  </Step>
+  <Step title="Sum volume per week">
+    Sessions in the same ISO week accumulate into a single bucket. The result is a map of `{ 'YYYY-MM-DD': totalKg }` keyed by each week's Monday.
+  </Step>
+  <Step title="Render the last 8 weeks">
+    The map is sorted chronologically and sliced to the 8 most recent weeks to keep the x-axis readable. A `Chart.destroy()` call precedes every re-render to prevent memory leaks.
+  </Step>
+</Steps>
+
+### Routine filter
+
+A `<select>` dropdown above the chart lets users filter volume by routine. Selecting a specific routine re-groups the data to include only sessions linked to that routine. Selecting "Todas las rutinas" restores the aggregate view.
+
+<Note>
+  The chart receives the **complete** history array — not the current page of the paginated table. Pagination only affects the history table rows; the chart always reflects all available data.
+</Note>
+
+---
+
+## Personal Records
+
+`GET /api/estadisticas/prs` returns the maximum weight ever logged per exercise, considering only sets marked as completed (`completada = 1`).
+
+```bash
+curl http://localhost:3000/api/estadisticas/prs \
+  -H "Authorization: Bearer <token>"
+```
+
+The model runs a single aggregation query across four joined tables:
+
+```sql
+SELECT
+  e.id              AS ejercicio_id,
+  e.nombre          AS ejercicio_nombre,
+  MAX(ss.peso)      AS peso_maximo,
+  MAX(ss.repeticiones) AS reps_maximas,
+  COUNT(DISTINCT ss.sesion_ejercicio_id) AS veces_entrenado,
+  COUNT(ss.id)      AS total_series_completadas
+FROM sesiones_entrenamiento se
+JOIN sesion_ejercicios sej ON sej.sesion_id = se.id
+JOIN sesion_series ss     ON ss.sesion_ejercicio_id = sej.id
+JOIN ejercicios e        ON e.id = sej.ejercicio_id
+WHERE se.usuario_id = ? AND ss.completada = 1
+GROUP BY e.id, e.nombre
+ORDER BY peso_maximo DESC
+```
+
+### Sample PR response
+
+```json
+{
+  "status": "ok",
+  "data": [
+    {
+      "ejercicio_id": 8,
+      "ejercicio_nombre": "Peso muerto",
+      "peso_maximo": 120,
+      "reps_maximas": 5,
+      "veces_entrenado": 14,
+      "total_series_completadas": 42
+    },
+    {
+      "ejercicio_id": 4,
+      "ejercicio_nombre": "Press de banca",
+      "peso_maximo": 100,
+      "reps_maximas": 8,
+      "veces_entrenado": 22,
+      "total_series_completadas": 66
+    }
+  ]
+}
+```
+
+### PR response fields
+
+<ResponseField name="ejercicio_id" type="number">
+  The exercise's primary key.
+</ResponseField>
+
+<ResponseField name="ejercicio_nombre" type="string">
+  The exercise's Spanish display name.
+</ResponseField>
+
+<ResponseField name="peso_maximo" type="number">
+  Highest weight (kg) ever logged in a completed set for this exercise.
+</ResponseField>
+
+<ResponseField name="reps_maximas" type="number">
+  Highest repetition count ever logged in a completed set.
+</ResponseField>
+
+<ResponseField name="veces_entrenado" type="number">
+  Number of distinct sessions in which this exercise appeared.
+</ResponseField>
+
+<ResponseField name="total_series_completadas" type="number">
+  Total count of completed sets ever logged for this exercise.
+</ResponseField>
+
+<Note>
+  If the authenticated user has no completed training sessions, the endpoint returns an empty array `[]` — never an error.
+</Note>
+
+---
+
+## Session History Table
+
+The profile view includes a paginated history table showing the 10 most recent sessions per page.
+
+<Tabs>
+  <Tab title="Table columns">
+    | Column | Source |
+    |--------|--------|
+    | Date | `sesiones_entrenamiento.fecha` formatted as `"15 de junio, 2026"` |
+    | Routine | `rutinas.nombre` via `LEFT JOIN` |
+    | Volume | `volumen_total_kg` (pre-aggregated) |
+    | Sets | `total_series` (completed sets count) |
+    | Duration | `duracion_minutos` |
+    | Detail link | Navigates to session detail view |
+  </Tab>
+  <Tab title="Pagination">
+    The frontend caches the full history array in `historialDatosCompletos`. Page changes re-slice the cache — no additional API calls are made.
+
+    ```js
+    const HISTORIAL_POR_PAGINA = 10;
+    let historialPaginaActual = 1;
+
+    function renderTablaHistorial(pagina) {
+      const inicio = (pagina - 1) * HISTORIAL_POR_PAGINA;
+      const fin = inicio + HISTORIAL_POR_PAGINA;
+      const paginaData = historialDatosCompletos.slice(inicio, fin);
+      // render rows...
+    }
+    ```
+
+    If the total session count is ≤ 10, pagination controls are hidden entirely.
+  </Tab>
+</Tabs>
+
+---
+
+## Progressive Overload
+
+`GET /api/sesiones/ultima/:rutina_id` is the bridge between the history system and the active training flow. It returns the most recent session for a routine with sets grouped by exercise, enabling the frontend to show each set's previous values as grey hints.
+
+```bash
+curl http://localhost:3000/api/sesiones/ultima/3 \
+  -H "Authorization: Bearer <token>"
+```
+
+```json
+{
+  "status": "ok",
+  "data": {
+    "sesionId": 17,
+    "ejercicios": {
+      "4": [
+        { "peso": "60.00", "repeticiones": 10 },
+        { "peso": "62.50", "repeticiones": 10 }
+      ]
+    }
+  }
+}
+```
+
+The workflow:
+
+<Steps>
+  <Step title="Load the routine">
+    `GET /api/rutinas/:id` provides planned sets and reps.
+  </Step>
+  <Step title="Fetch the last session">
+    `GET /api/sesiones/ultima/:rutina_id` retrieves actual weights and reps from the previous workout.
+  </Step>
+  <Step title="Inject hint values">
+    `inyectarAnteriorEnCards()` adds a `<span class="anterior-valor">` to each set row showing the previous values (e.g. `60kg × 10`). These hints are purely visual — they do not pre-fill the inputs, encouraging the user to consciously decide whether to match or exceed last session.
+  </Step>
+</Steps>
+
+---
+
+## Data Source
+
+All statistics — weekly volume, personal records, session history totals — are derived exclusively from the `sesion_series` table. The relevant columns are:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `numero_serie` | INT | Set number within the exercise (1-indexed) |
+| `repeticiones` | INT | Reps performed |
+| `peso` | DECIMAL | Weight in kilograms |
+| `completada` | BOOLEAN | Whether the user checked this set as done |
+
+Only rows where `completada = 1` contribute to PRs and `volumen_total_kg` calculations. Unchecked sets are saved to the database but excluded from all statistics.
+
+<Warning>
+  Weights are stored as logged by the user. There is no unit conversion — the app assumes all values are in kilograms. If a user logs bodyweight exercises with `peso = 0`, those sets appear in history but contribute zero volume and zero to PR calculations.
+</Warning>
+
+---
+
+<CardGroup cols={2}>
+  <Card title="API Reference — Statistics" icon="chart-bar" href="/api/statistics">
+    View the full schema for `GET /api/estadisticas/prs`.
+  </Card>
+  <Card title="API Reference — Sessions" icon="code" href="/api/sessions">
+    View the full schema for `GET /api/sesiones` and `GET /api/sesiones/ultima/:rutina_id`.
+  </Card>
+</CardGroup>

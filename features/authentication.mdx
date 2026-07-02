@@ -1,0 +1,228 @@
+---
+title: "JWT Authentication & Password Recovery in Blackterz"
+sidebarTitle: "Authentication"
+description: "Secure user registration, login, and password recovery using JWT tokens and bcrypt hashing. Tokens are valid for 7 days and stored in localStorage."
+---
+
+Blackterz uses **JSON Web Tokens (JWT)** for stateless authentication and **bcrypt** (10 salt rounds) for password hashing. Every request to a protected endpoint must include an `Authorization: Bearer <token>` header. Tokens are issued on registration and login, stored client-side in `localStorage`, and expire after 7 days.
+
+## Registration
+
+New accounts are created with `POST /api/auth/register`. The server validates that the email is not already in use, hashes the password with bcrypt, and returns a `201 Created` response with the new user object.
+
+<Steps>
+  <Step title="Validate input">
+    The controller checks that `nombre`, `email`, and `password` are present, that the email matches the regex `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`, and that the password is at least 6 characters long.
+  </Step>
+  <Step title="Check email uniqueness">
+    `buscarUsuarioPorEmail(email)` queries the database. If a row is found, the server responds `409 Conflict` — the email is already registered.
+  </Step>
+  <Step title="Hash the password">
+    `bcrypt.hash(password, 10)` runs the algorithm 2¹⁰ = 1,024 times, generating a unique salt per hash. The stored value looks like `$2b$10$<22-char-salt><31-char-hash>`.
+  </Step>
+  <Step title="Persist the user">
+    `crearUsuario(nombre, email, passwordHash)` inserts the new row and returns `{ id, nombre, email }`.
+  </Step>
+  <Step title="Respond 201 Created">
+    The response body contains `status: 'ok'` and the new user's public fields — never the password hash.
+  </Step>
+</Steps>
+
+### Request body
+
+<ParamField body="nombre" type="string" required>
+  The user's display name.
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  A valid email address. Must be unique across all accounts.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Plain-text password. Minimum 6 characters. Never stored — only the bcrypt hash is persisted.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="status" type="string">
+  `"ok"` on success.
+</ResponseField>
+
+<ResponseField name="data.id" type="number">
+  The auto-incremented primary key of the new user.
+</ResponseField>
+
+<ResponseField name="data.nombre" type="string">
+  The user's display name.
+</ResponseField>
+
+<ResponseField name="data.email" type="string">
+  The user's email address.
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:3000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"nombre":"María","email":"maria@example.com","password":"secret123"}'
+```
+
+```json Response (201)
+{
+  "status": "ok",
+  "message": "Usuario registrado exitosamente",
+  "data": {
+    "id": 7,
+    "nombre": "María",
+    "email": "maria@example.com"
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## Login
+
+`POST /api/auth/login` verifies credentials and returns a signed JWT valid for 7 days.
+
+<Steps>
+  <Step title="Look up the user by email">
+    `buscarUsuarioPorEmail(email)` is called. If no row is found, the server responds `401 Unauthorized` with `"Credenciales inválidas"` — the same message used for a wrong password, to prevent email enumeration.
+  </Step>
+  <Step title="Check the soft-delete flag">
+    If `usuario.activo === false`, the account has been deactivated and the server responds `403 Forbidden` — the user is recognized, but access is denied.
+  </Step>
+  <Step title="Compare the password">
+    `bcrypt.compare(password, usuario.password)` extracts the salt from the stored hash, re-hashes the submitted password with that salt, and compares. Returns `false` → `401`.
+  </Step>
+  <Step title="Sign a JWT">
+    `jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' })` creates the token. The payload contains `usuario_id`, `nombre`, and `email`.
+  </Step>
+  <Step title="Return token + user">
+    The response body includes `data.token` and `data.usuario` (id, nombre, email).
+  </Step>
+</Steps>
+
+### JWT payload structure
+
+```json
+{
+  "usuario_id": 7,
+  "nombre": "María",
+  "email": "maria@example.com",
+  "iat": 1718059200,
+  "exp": 1718664000
+}
+```
+
+<Note>
+  The JWT payload is **base64-encoded, not encrypted**. Anyone can decode it. Never put sensitive data (passwords, payment info) in the payload. Security comes from the HMAC-SHA256 **signature**, which `jwt.verify()` validates on every request.
+</Note>
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"maria@example.com","password":"secret123"}'
+```
+
+```json Response (200)
+{
+  "status": "ok",
+  "message": "Inicio de sesión exitoso",
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "usuario": {
+      "id": 7,
+      "nombre": "María",
+      "email": "maria@example.com"
+    }
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## Using the Token
+
+After login the frontend stores the token in `localStorage` and attaches it to every subsequent API request via the `Authorization` header.
+
+```bash Authenticated request
+curl http://localhost:3000/api/rutinas \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+The `verificarToken` middleware runs before every protected controller. It:
+
+1. Reads `req.headers.authorization`.
+2. Splits on a space and verifies the `Bearer` prefix.
+3. Calls `jwt.verify(token, process.env.JWT_SECRET)` — this validates the signature **and** the expiry in a single call.
+4. Attaches the decoded payload to `req.usuario` so controllers can read `req.usuario.usuario_id` safely.
+
+<Warning>
+  **Never read `usuario_id` from `req.body`**. A malicious client can set any value there (ID spoofing). The middleware-injected `req.usuario.usuario_id` is the only trustworthy source of the authenticated user's identity.
+</Warning>
+
+---
+
+## Password Recovery
+
+The recovery flow uses a time-limited, single-use token stored in the `password_resets` table.
+
+<Steps>
+  <Step title="Request a reset link">
+    `POST /api/auth/forgot-password` with `{ email }`. If the email belongs to an active account, the server generates a 64-character hex token (`crypto.randomBytes(32).toString('hex')`), saves it with a 1-hour expiry, and emails a reset link to the user.
+  </Step>
+  <Step title="Follow the link">
+    The email contains a link to `/reset-password.html?token=<hex>`. The page reads the token from the query string.
+  </Step>
+  <Step title="Submit the new password">
+    `POST /api/auth/reset-password` with `{ token, passwordNueva }`. The server validates the token (exists + not expired + not used), hashes the new password with bcrypt, updates the user's password, and marks the token as used so it cannot be reused.
+  </Step>
+</Steps>
+
+<Note>
+  `POST /api/auth/forgot-password` **always** responds `200 OK` with the same message regardless of whether the email exists. This prevents attackers from probing which addresses are registered.
+</Note>
+
+---
+
+## Token Expiration & Rate Limiting
+
+<CardGroup cols={2}>
+  <Card title="401 responses" icon="lock">
+    A `401 Unauthorized` means the token is missing, malformed, or expired. The client should clear `localStorage`, remove the token, and redirect the user to the login screen.
+  </Card>
+  <Card title="403 responses" icon="ban">
+    A `403 Forbidden` on login means the account exists and the password is correct, but the `activo` column is `FALSE`. The account was soft-deleted and cannot authenticate.
+  </Card>
+</CardGroup>
+
+<Tip>
+  Auth endpoints (`/api/auth/register`, `/api/auth/login`) are rate-limited: **10 requests per 15 minutes** in production and **100 per 15 minutes** in development. If you exceed the limit you will receive a `429 Too Many Requests` response.
+</Tip>
+
+---
+
+## Soft-Delete Guard
+
+When an account is deactivated via `DELETE /api/usuarios/me`, the `activo` column is set to `FALSE`. The login controller checks this field **after** verifying the password:
+
+```js
+if (!usuario.activo) {
+  return res.status(403).json({
+    status: 'error',
+    message: 'Esta cuenta ha sido desactivada',
+  });
+}
+```
+
+This means deactivated users cannot obtain a new token even if they remember their credentials. Existing tokens will still pass `jwt.verify()` until they expire naturally after 7 days — so frontend logout (clearing `localStorage`) should be enforced immediately on deactivation.
+
+---
+
+<Card title="API Reference — Authentication" icon="code" href="/api/auth">
+  View full request/response schemas, error codes, and live playground for all `/api/auth` endpoints.
+</Card>

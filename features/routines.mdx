@@ -1,0 +1,279 @@
+---
+title: "Creating and Managing Workout Routines in Blackterz"
+sidebarTitle: "Routines"
+description: "Build up to 4 personalized routines with ordered exercise lists. Soft-delete preserves training history while recommended routines are always available."
+---
+
+A routine in Blackterz is a named, ordered collection of exercises. Each exercise slot in a routine carries its own planned sets, reps, weight, and rest time. Users can own up to **4 active personalized routines** at a time; the database also ships with seeded recommended routines that are visible to every user. Deleting a routine is a soft-delete — the row is marked `activa = false` so that training history referencing that routine is never lost.
+
+## Listing Routines
+
+`GET /api/rutinas` returns all active routines for the authenticated user, ordered by creation date descending. The list response is lightweight — it does **not** include the nested exercises array, only the routine metadata and a computed `total_ejercicios` count.
+
+```bash
+curl http://localhost:3000/api/rutinas \
+  -H "Authorization: Bearer <token>"
+```
+
+```json
+{
+  "status": "ok",
+  "data": [
+    {
+      "id": 3,
+      "nombre": "Full Body",
+      "descripcion": "Tres días a la semana",
+      "created_at": "2026-06-01T14:00:00.000Z",
+      "es_recomendada": false,
+      "total_ejercicios": 6
+    }
+  ]
+}
+```
+
+<Note>
+  Routines with `es_recomendada = true` are seeded by the database and appear in every user's list. They count toward the user's view but **not** toward the 4-routine personal limit (the `contarRutinasUsuario` query filters `es_recomendada = FALSE`).
+</Note>
+
+---
+
+## Creating a Routine
+
+`POST /api/rutinas/crear` creates a new routine and optionally attaches an initial exercise list.
+
+<Steps>
+  <Step title="Extract the user from the JWT">
+    `usuario_id` is read from `req.usuario.usuario_id` (injected by `verificarToken`). It is never taken from the request body to prevent ID spoofing.
+  </Step>
+  <Step title="Validate input">
+    `nombre` must be a non-empty string. `descripcion` is optional. If `ejercicios_ids` is provided it must be a non-empty array of numeric IDs.
+  </Step>
+  <Step title="Enforce the 4-routine limit">
+    `contarRutinasUsuario(usuario_id)` runs `SELECT COUNT(*) FROM rutinas WHERE usuario_id = ? AND activa = TRUE AND es_recomendada = FALSE`. If the result is `>= 4`, the server returns `403 Forbidden`.
+  </Step>
+  <Step title="Insert the routine">
+    `insertarRutina(usuario_id, nombre, descripcion)` inserts the row and returns `{ id, nombre, descripcion, usuario_id }`.
+  </Step>
+  <Step title="Attach exercises (optional)">
+    If `ejercicios_ids` was provided, `insertarEjerciciosEnRutina(rutinaId, idsValidos)` inserts one row per ID into `ejercicios_rutinas` with an auto-incrementing `orden` value.
+  </Step>
+</Steps>
+
+### Request body
+
+<ParamField body="nombre" type="string" required>
+  The routine's display name, e.g. `"Push Day"`.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Optional free-text description of the routine.
+</ParamField>
+
+<ParamField body="ejercicios_ids" type="number[]">
+  Optional array of exercise IDs to attach at creation time. Order in the array becomes the exercise order in the routine.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:3000/api/rutinas/crear \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"nombre":"Push Day","descripcion":"Pecho, hombros y tríceps","ejercicios_ids":[4,12,7]}'
+```
+
+```json Response (201)
+{
+  "status": "ok",
+  "message": "Rutina creada exitosamente",
+  "data": {
+    "id": 4,
+    "nombre": "Push Day",
+    "descripcion": "Pecho, hombros y tríceps",
+    "usuario_id": 7
+  }
+}
+```
+</CodeGroup>
+
+<Warning>
+  If the user already has 4 active personalized routines, the server returns `403 Forbidden` — `"Has alcanzado el límite de 4 rutinas personalizadas."` Soft-delete a routine first to free up a slot.
+</Warning>
+
+---
+
+## Viewing a Routine (with Exercises)
+
+`GET /api/rutinas/:id` returns a single routine with its full nested exercises array. The model performs a single `LEFT JOIN` across three tables (`rutinas → ejercicios_rutinas → ejercicios`), restructuring the flat SQL result into a hierarchical JSON object.
+
+```bash
+curl http://localhost:3000/api/rutinas/4 \
+  -H "Authorization: Bearer <token>"
+```
+
+### Sample response
+
+```json
+{
+  "status": "ok",
+  "data": {
+    "id": 4,
+    "nombre": "Push Day",
+    "descripcion": "Pecho, hombros y tríceps",
+    "ejercicios": [
+      {
+        "id": 4,
+        "nombre": "Press de banca",
+        "descripcion": "Ejercicio compound para pecho.",
+        "categoria": "fuerza",
+        "imagen_url": "/images/bench-press.avif",
+        "gif_url": "https://cdn.ascendapi.com/bench-press.mp4",
+        "orden": 1,
+        "series": 4,
+        "repeticiones": 10,
+        "peso": 60
+      },
+      {
+        "id": 12,
+        "nombre": "Press militar",
+        "descripcion": "Empuje vertical para hombros.",
+        "categoria": "fuerza",
+        "imagen_url": "/images/overhead-press.avif",
+        "gif_url": null,
+        "orden": 2,
+        "series": 3,
+        "repeticiones": 12,
+        "peso": 40
+      }
+    ]
+  }
+}
+```
+
+<ResponseField name="data.id" type="number">
+  The routine's primary key.
+</ResponseField>
+
+<ResponseField name="data.nombre" type="string">
+  The routine's display name.
+</ResponseField>
+
+<ResponseField name="data.ejercicios" type="array">
+  Ordered list of exercises. Empty array if no exercises have been assigned yet.
+</ResponseField>
+
+<ResponseField name="data.ejercicios[].orden" type="number">
+  Position of this exercise within the routine (1-indexed, ascending).
+</ResponseField>
+
+<ResponseField name="data.ejercicios[].series" type="number">
+  Planned number of sets for this exercise in the routine.
+</ResponseField>
+
+<ResponseField name="data.ejercicios[].repeticiones" type="number">
+  Planned repetitions per set.
+</ResponseField>
+
+<ResponseField name="data.ejercicios[].peso" type="number">
+  Planned weight in kilograms.
+</ResponseField>
+
+---
+
+## Editing a Routine
+
+`PUT /api/rutinas/:id` updates a routine's name and description, and optionally **replaces** its entire exercise list in a single atomic transaction.
+
+<ParamField body="nombre" type="string" required>
+  New display name for the routine.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Updated description. Pass `null` to clear it.
+</ParamField>
+
+<ParamField body="ejercicios_ids" type="number[]">
+  If provided, **replaces all current exercises** with this ordered list. The model runs `DELETE` on the existing `ejercicios_rutinas` rows then re-inserts the new IDs with sequential `orden` values, all inside a `BEGIN / COMMIT / ROLLBACK` transaction.
+</ParamField>
+
+<Accordion title="How exercise replacement works">
+  The model function `reemplazarEjerciciosDeRutina` wraps the delete + insert in a MySQL transaction:
+
+  ```js
+  await connection.beginTransaction();
+
+  // 1. Delete existing exercises (validates ownership via JOIN)
+  await connection.execute(
+    `DELETE er FROM ejercicios_rutinas er
+     INNER JOIN rutinas r ON r.id = er.rutina_id
+     WHERE er.rutina_id = ? AND r.usuario_id = ? AND r.activa = TRUE`,
+    [rutinaId, usuarioId]
+  );
+
+  // 2. Insert new exercises in order
+  for (let i = 0; i < ids.length; i++) {
+    await connection.execute(
+      `INSERT INTO ejercicios_rutinas (rutina_id, ejercicio_id, orden) VALUES (?, ?, ?)`,
+      [rutinaId, ids[i], i + 1]
+    );
+  }
+
+  await connection.commit();
+  ```
+
+  If any insert fails, the whole transaction is rolled back — the routine retains its previous exercise list.
+</Accordion>
+
+```bash
+curl -X PUT http://localhost:3000/api/rutinas/4 \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"nombre":"Push Day A","descripcion":"Versión A","ejercicios_ids":[4,12,7,9]}'
+```
+
+The server re-reads the updated routine from the database after the transaction and returns the fresh state (same shape as the `GET /api/rutinas/:id` response).
+
+---
+
+## Deleting a Routine (Soft-Delete)
+
+`DELETE /api/rutinas/:id` sets `activa = FALSE` on the routine row. The routine disappears from the user's list (because all queries filter `WHERE activa = TRUE`) but the row — and all associated training sessions — remain in the database.
+
+```bash
+curl -X DELETE http://localhost:3000/api/rutinas/4 \
+  -H "Authorization: Bearer <token>"
+```
+
+```json
+{
+  "status": "ok",
+  "message": "Rutina desactivada correctamente"
+}
+```
+
+<Note>
+  Training history is linked to `rutinas.id` via a foreign key on `sesiones_entrenamiento.rutina_id`. Soft-deleting a routine preserves the integrity of all past sessions — they still show the routine name in the history view because the `sesionModel` uses a `LEFT JOIN` that returns the row even when `activa = FALSE`.
+</Note>
+
+---
+
+## Recommended Routines
+
+The database is seeded with routines where `es_recomendada = TRUE`. These are created either via the `seed.sql` file or automatically by the onboarding flow (`POST /api/usuarios/onboarding`) when a new beginner user requests a recommendation. Recommended routines are visible to the user who owns them but do not count toward the 4-routine personal limit.
+
+<CardGroup cols={3}>
+  <Card title="Bajo Impacto" icon="heart-pulse">
+    Assigned to beginners with BMI ≥ 25. Focuses on mobility and low-impact exercises.
+  </Card>
+  <Card title="Fuerza Base" icon="dumbbell">
+    Assigned to male beginners with BMI &lt; 25. Upper-body strength focus.
+  </Card>
+  <Card title="Tonificación" icon="person-running">
+    Assigned to female beginners with BMI &lt; 25. Lower-body and glute focus.
+  </Card>
+</CardGroup>
+
+---
+
+<Card title="API Reference — Routines" icon="code" href="/api/routines">
+  View full request/response schemas, error codes, and live playground for all `/api/rutinas` endpoints.
+</Card>

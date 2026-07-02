@@ -1,0 +1,496 @@
+---
+title: "Users API: Profile, Avatar, Account, and Onboarding"
+sidebarTitle: "Users"
+description: "Manage user accounts in Blackterz Gym: read and update profiles, upload avatars, change passwords, and complete the onboarding flow."
+---
+
+The Users API covers the full lifecycle of a Blackterz account — from reading your own profile after login, through uploading a profile picture, completing the onboarding questionnaire, updating biometric data, changing your password, and eventually soft-deleting your account. All endpoints require a valid Bearer token; the `verificarToken` middleware extracts `usuario_id` from the JWT before every request reaches the controller.
+
+<Note>
+  The route prefix `/api/usuario` (singular) is registered as an alias for `/api/usuarios` (plural). Both paths resolve to the same controllers and behave identically.
+</Note>
+
+---
+
+## GET /api/usuarios/me
+
+Returns the authenticated user's public profile. Excludes the password hash.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+### Response
+
+<ResponseField name="status" type="string">
+  `"ok"` on success.
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  <Expandable title="Profile fields">
+    <ResponseField name="id" type="integer">
+      Internal user ID.
+    </ResponseField>
+    <ResponseField name="nombre" type="string">
+      Display name (up to 50 characters).
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      Registered email address.
+    </ResponseField>
+    <ResponseField name="avatar_url" type="string | null">
+      Public path to the profile picture, e.g. `"/images/avatars/avatar-5.jpg"`. `null` if no avatar has been uploaded.
+    </ResponseField>
+    <ResponseField name="created_at" type="string">
+      ISO 8601 timestamp of account creation.
+    </ResponseField>
+    <ResponseField name="onboarding_completado" type="integer">
+      `1` if the user has completed the onboarding flow, `0` otherwise.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X GET https://api.blackterzgym.com/api/usuarios/me \
+  -H "Authorization: Bearer <your_token>"
+```
+
+```json Response
+{
+  "status": "ok",
+  "data": {
+    "id": 5,
+    "nombre": "Laura Martínez",
+    "email": "laura@example.com",
+    "avatar_url": "/images/avatars/avatar-5.jpg",
+    "created_at": "2025-03-12T18:45:00.000Z",
+    "onboarding_completado": 1
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## PUT /api/usuarios/me
+
+Updates the authenticated user's display name. On success, issues a **new JWT** with the updated name embedded in the payload so the frontend stays in sync without requiring a new login.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+### Request body
+
+<ParamField body="nombre" type="string" required>
+  New display name. Must be a non-empty string of at most 50 characters.
+</ParamField>
+
+### Response
+
+<ResponseField name="status" type="string">
+  `"ok"` on success.
+</ResponseField>
+<ResponseField name="data.nombre" type="string">
+  The trimmed name that was saved.
+</ResponseField>
+<ResponseField name="token" type="string">
+  A fresh JWT (`expiresIn: "7d"`) with the updated `nombre` in its payload. Replace the stored token on the client with this value.
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X PUT https://api.blackterzgym.com/api/usuarios/me \
+  -H "Authorization: Bearer <your_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"nombre": "Laura G. Martínez"}'
+```
+
+```json Response
+{
+  "status": "ok",
+  "data": { "nombre": "Laura G. Martínez" },
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+</CodeGroup>
+
+---
+
+## DELETE /api/usuarios/me
+
+Soft-deletes the authenticated user's account by setting `activo = 0` in the database. The row is preserved for data-integrity purposes; the user simply cannot log in afterwards.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+<Warning>
+  This action is not reversible through the API. Once `activo` is set to `0`, any login attempt for that email will be rejected. No request body is required.
+</Warning>
+
+### Response
+
+<ResponseField name="status" type="string">
+  `"ok"` on success.
+</ResponseField>
+<ResponseField name="message" type="string">
+  Human-readable confirmation, e.g. `"Cuenta desactivada correctamente"`.
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X DELETE https://api.blackterzgym.com/api/usuarios/me \
+  -H "Authorization: Bearer <your_token>"
+```
+
+```json Response
+{
+  "status": "ok",
+  "message": "Cuenta desactivada correctamente"
+}
+```
+</CodeGroup>
+
+---
+
+## POST /api/usuarios/avatar
+
+Uploads a new profile picture for the authenticated user. The file is stored on the server at `public/images/avatars/` under the filename `avatar-{userId}.{ext}`, overwriting any previously uploaded photo for that user.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`  
+**Content-Type:** `multipart/form-data`
+
+<Note>
+  The form field **must** be named `avatar`. Any other field name will result in a 400 error because Multer will not find the file on `req.file`. Allowed extensions are `.jpg`, `.jpeg`, `.png`, `.gif`, and `.webp`. Maximum file size is **2 MB**.
+</Note>
+
+### Request
+
+<ParamField body="avatar" type="file" required>
+  The image file. Accepted MIME types: `image/jpeg`, `image/png`, `image/gif`, `image/webp`. Max size: 2 MB.
+</ParamField>
+
+### Response
+
+<ResponseField name="status" type="string">
+  `"ok"` on success.
+</ResponseField>
+<ResponseField name="data.avatar_url" type="string">
+  Public path to the saved image, e.g. `"/images/avatars/avatar-5.jpg"`. Use this value wherever the avatar is displayed in the UI.
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://api.blackterzgym.com/api/usuarios/avatar \
+  -H "Authorization: Bearer <your_token>" \
+  -F "avatar=@/path/to/photo.jpg"
+```
+
+```javascript JavaScript (fetch + FormData)
+const form = new FormData();
+form.append('avatar', fileInput.files[0]);
+
+const res = await fetch('/api/usuarios/avatar', {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${token}` },
+  body: form,
+});
+const { data } = await res.json();
+console.log(data.avatar_url); // "/images/avatars/avatar-5.jpg"
+```
+
+```json Response
+{
+  "status": "ok",
+  "data": {
+    "avatar_url": "/images/avatars/avatar-5.jpg"
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## PUT /api/usuarios/contrasena
+
+Changes the authenticated user's password. The current password must be provided and verified before the new password is accepted.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+### Request body
+
+<ParamField body="passwordActual" type="string" required>
+  The user's current password in plain text. Required when `passwordNueva` is supplied.
+</ParamField>
+
+<ParamField body="passwordNueva" type="string">
+  The desired new password. If omitted or empty, the endpoint returns `200 ok` without making any changes. When provided, must satisfy all of the following:
+  - Minimum 8 characters
+  - At least one lowercase letter
+  - At least one uppercase letter
+  - At least one digit
+  - At least one special character (e.g. `!`, `@`, `#`, `$`, `%`)
+</ParamField>
+
+### Response
+
+<ResponseField name="status" type="string">
+  `"ok"` on success.
+</ResponseField>
+<ResponseField name="message" type="string">
+  `"Contraseña actualizada"` when the password was changed, or `"Sin cambios en la contraseña"` when `passwordNueva` was absent.
+</ResponseField>
+
+<Accordion title="Error responses">
+
+| Status | Condition |
+|--------|-----------|
+| `400`  | `passwordNueva` provided but `passwordActual` is missing |
+| `400`  | `passwordNueva` fails format validation |
+| `401`  | `passwordActual` does not match the stored bcrypt hash |
+| `404`  | Authenticated user not found in the database |
+
+```json
+// 401 — wrong current password
+{
+  "status": "error",
+  "message": "Contraseña actual incorrecta"
+}
+```
+</Accordion>
+
+<CodeGroup>
+```bash cURL
+curl -X PUT https://api.blackterzgym.com/api/usuarios/contrasena \
+  -H "Authorization: Bearer <your_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "passwordActual": "OldPass1!",
+    "passwordNueva": "NewSecure2@"
+  }'
+```
+
+```json Response
+{
+  "status": "ok",
+  "message": "Contraseña actualizada"
+}
+```
+</CodeGroup>
+
+---
+
+## POST /api/usuarios/onboarding
+
+Completes the onboarding flow for the authenticated user. Stores experience level and optional biometric data, then sets `onboarding_completado = TRUE` on the account.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+If `quiere_recomendacion` is `true` and `nivel_experiencia` is `"Principiante"`, the server will automatically create a starter routine for the user. The routine is selected based on BMI (calculated from `peso_actual` and `estatura_cm`) and `sexo`:
+
+<Accordion title="Auto-routine assignment logic">
+  | Condition | Routine |
+  |-----------|---------|
+  | IMC ≥ 25 (any sex) | `"Adaptación: Bajo Impacto"` — mobility and low-impact exercises |
+  | IMC < 25, Masculino | `"Adaptación: Fuerza Base"` — upper-body strength compound lifts |
+  | IMC < 25, Femenino | `"Adaptación: Tonificación"` — glutes and lower-body tonification |
+  | Missing weight/height | `"Adaptación - Cuerpo Completo"` — generic full-body routine |
+
+  The auto-routine assignment runs inside a database transaction. If it fails, the onboarding data is still saved and the response remains `200 ok`.
+</Accordion>
+
+### Request body
+
+<ParamField body="nivel_experiencia" type="string" required>
+  Must be one of: `"Principiante"`, `"Intermedio"`, `"Avanzado"`.
+</ParamField>
+
+<ParamField body="sexo" type="string">
+  Biological sex. Must be one of: `"Masculino"`, `"Femenino"`, `"Otro"`. Defaults to `"Otro"` if omitted.
+</ParamField>
+
+<ParamField body="peso_actual" type="number">
+  Current body weight in kilograms. Must be a positive number if provided.
+</ParamField>
+
+<ParamField body="estatura_cm" type="number">
+  Height in centimetres. Must be a positive number if provided.
+</ParamField>
+
+<ParamField body="quiere_recomendacion" type="boolean">
+  When `true` and the user is `"Principiante"`, triggers automatic routine creation. Ignored for other experience levels.
+</ParamField>
+
+### Response
+
+<ResponseField name="status" type="string">
+  `"ok"` on success.
+</ResponseField>
+<ResponseField name="message" type="string">
+  `"Onboarding completado"`.
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://api.blackterzgym.com/api/usuarios/onboarding \
+  -H "Authorization: Bearer <your_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nivel_experiencia": "Principiante",
+    "sexo": "Femenino",
+    "peso_actual": 62,
+    "estatura_cm": 165,
+    "quiere_recomendacion": true
+  }'
+```
+
+```json Response
+{
+  "status": "ok",
+  "message": "Onboarding completado"
+}
+```
+</CodeGroup>
+
+---
+
+## GET /api/usuarios/perfil
+
+Returns the biometric and experience data for the authenticated user. This is the data displayed in the "Mis Datos" section of the profile screen.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+### Response
+
+<ResponseField name="status" type="string">
+  `"ok"` on success.
+</ResponseField>
+<ResponseField name="data" type="object">
+  <Expandable title="Biometric profile fields">
+    <ResponseField name="nombre" type="string">
+      Display name.
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      Registered email address.
+    </ResponseField>
+    <ResponseField name="peso_actual" type="number | null">
+      Body weight in kilograms. `null` if never set.
+    </ResponseField>
+    <ResponseField name="estatura_cm" type="number | null">
+      Height in centimetres. `null` if never set.
+    </ResponseField>
+    <ResponseField name="nivel_experiencia" type="string | null">
+      One of `"Principiante"`, `"Intermedio"`, `"Avanzado"`. `null` if onboarding was never completed.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X GET https://api.blackterzgym.com/api/usuarios/perfil \
+  -H "Authorization: Bearer <your_token>"
+```
+
+```json Response
+{
+  "status": "ok",
+  "data": {
+    "nombre": "Laura Martínez",
+    "email": "laura@example.com",
+    "peso_actual": 62.5,
+    "estatura_cm": 165,
+    "nivel_experiencia": "Principiante"
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## PATCH /api/usuarios/perfil
+
+Updates any combination of profile fields in a single request: name, email, weight, height, and experience level. Fields not present in the body are left unchanged (fetched from the database before the update).
+
+If `nombre` or `email` changes, the endpoint issues a **new JWT** reflecting the updated values so the frontend token stays in sync.
+
+**Auth required:** Yes — `Authorization: Bearer <token>`
+
+### Request body
+
+<ParamField body="nombre" type="string">
+  New display name. Max 50 characters, cannot be empty if provided.
+</ParamField>
+
+<ParamField body="email" type="string">
+  New email address. Must be valid format and not already in use by another account.
+</ParamField>
+
+<ParamField body="peso_actual" type="number">
+  New body weight in kilograms. Must be a positive number.
+</ParamField>
+
+<ParamField body="estatura_cm" type="number">
+  New height in centimetres. Must be a positive number.
+</ParamField>
+
+<ParamField body="nivel_experiencia" type="string">
+  Must be one of: `"Principiante"`, `"Intermedio"`, `"Avanzado"`.
+</ParamField>
+
+### Response
+
+<ResponseField name="status" type="string">
+  `"ok"` on success.
+</ResponseField>
+<ResponseField name="data" type="object">
+  The full set of saved profile values (merged with unchanged fields from the database).
+</ResponseField>
+<ResponseField name="token" type="string">
+  New JWT. Only present in the response when `nombre` or `email` actually changed.
+</ResponseField>
+
+<Accordion title="Error responses">
+
+| Status | Condition |
+|--------|-----------|
+| `400`  | `nombre` is empty or exceeds 50 characters |
+| `400`  | `email` format is invalid |
+| `400`  | `nivel_experiencia` is not one of the allowed values |
+| `400`  | `peso_actual` or `estatura_cm` is not a positive number |
+| `409`  | `email` is already registered by another user |
+
+</Accordion>
+
+<CodeGroup>
+```bash cURL
+curl -X PATCH https://api.blackterzgym.com/api/usuarios/perfil \
+  -H "Authorization: Bearer <your_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "peso_actual": 64,
+    "nivel_experiencia": "Intermedio"
+  }'
+```
+
+```json Response (no JWT change)
+{
+  "status": "ok",
+  "data": {
+    "nombre": "Laura Martínez",
+    "email": "laura@example.com",
+    "peso_actual": 64,
+    "estatura_cm": 165,
+    "nivel_experiencia": "Intermedio"
+  }
+}
+```
+
+```json Response (name changed — new token)
+{
+  "status": "ok",
+  "data": {
+    "nombre": "Laura G. Martínez",
+    "email": "laura@example.com",
+    "peso_actual": 64,
+    "estatura_cm": 165,
+    "nivel_experiencia": "Intermedio"
+  },
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+</CodeGroup>

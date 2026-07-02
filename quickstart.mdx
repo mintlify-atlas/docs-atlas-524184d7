@@ -1,47 +1,166 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Blackterz in 5 Minutes"
+sidebarTitle: "Quickstart"
+description: "Clone the Blackterz repo, set up MySQL, run migrations, configure your .env file, and have the API server running on localhost:3000."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+This guide walks you through getting a fully functional Blackterz instance running on your local machine. By the end you will have the Express server running on port 3000, the `fitness_app` MySQL database seeded with 64 exercises and 15 muscle groups, and the Vanilla JS frontend accessible in your browser.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
 
-    ```bash
-    npm install your-package
-    ```
-  </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+### Clone the repository and install dependencies
 
-    ```bash
-    your-cli init
-    ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+Clone the project from GitHub and install all Node.js dependencies in one go:
 
-    ```bash
-    your-cli start
-    ```
-  </Step>
+```bash
+git clone https://github.com/Blackterz2/Proyecto_5to_Semestre.git && cd Proyecto_5to_Semestre && npm install
+```
+
+This installs all packages defined in `package.json`, including Express, mysql2, bcrypt, jsonwebtoken, multer, nodemailer, helmet, express-rate-limit, and dotenv.
+
+### Create the MySQL database
+
+Connect to your MySQL server and create the `fitness_app` database:
+
+```sql
+CREATE DATABASE fitness_app;
+```
+
+<Note>
+  The database **must** be named `fitness_app`. The application will not create it automatically — if the name does not match what you set in `DB_NAME`, the connection will fail.
+</Note>
+
+### Seed the exercise catalog
+
+Load the base schema and the 64-exercise catalog (15 muscle groups, 188 exercise-muscle relationships) into `fitness_app`:
+
+```bash
+mysql -u root -p fitness_app < seed.sql
+```
+
+When prompted, enter your MySQL root password. This populates the `grupos_musculares`, `ejercicios`, and `ejercicios_grupos_musculares` tables.
+
+### Run database migrations in order
+
+The schema has evolved across development milestones. Run each migration file from the `docs/` folder in the exact order listed below — skipping or reordering will cause column conflicts:
+
+```bash
+mysql -u root -p fitness_app < docs/migracion-activo.sql
+mysql -u root -p fitness_app < docs/migracion-avatar.sql
+mysql -u root -p fitness_app < docs/migracion-hito13.sql
+mysql -u root -p fitness_app < docs/migracion-gif-url.sql
+mysql -u root -p fitness_app < docs/migracion-hito17.sql
+mysql -u root -p fitness_app < docs/migracion-hito17-parte2.sql
+mysql -u root -p fitness_app < docs/migracion-dropear-notas.sql
+mysql -u root -p fitness_app < docs/migracion-dropear-columnas.sql
+mysql -u root -p fitness_app < docs/migracion-drop-estado.sql
+mysql -u root -p fitness_app < docs/migracion-password-resets.sql
+mysql -u root -p fitness_app < docs/migracion-rutinas-recomendadas.sql
+```
+
+<Accordion title="What each migration does">
+| File | What it adds |
+|---|---|
+| `migracion-activo.sql` | `activo` column on `usuarios` (soft delete) |
+| `migracion-avatar.sql` | `avatar_url` column on `usuarios` (profile photo) |
+| `migracion-hito13.sql` | `activa` column on `rutinas` (soft delete for routines) |
+| `migracion-gif-url.sql` | `gif_url` column on `ejercicios` (video integration) |
+| `migracion-hito17.sql` | Onboarding columns on `usuarios`: `nivel_experiencia`, `peso_actual`, `estatura_cm`, `onboarding_completado` |
+| `migracion-hito17-parte2.sql` | `sexo` column on `usuarios` |
+| `migracion-dropear-notas.sql` | Drops unused `notas` columns from `ejercicios_rutinas`, `rutinas`, `sesion_series` |
+| `migracion-dropear-columnas.sql` | Drops 6 redundant columns from `sesion_ejercicios` and `sesion_series` |
+| `migracion-drop-estado.sql` | Drops `estado` from `sesiones_entrenamiento` (only completed sessions are persisted) |
+| `migracion-password-resets.sql` | Creates `password_resets` table for email-based recovery tokens |
+| `migracion-rutinas-recomendadas.sql` | Creates `rutinas_recomendadas` table for onboarding routine assignment |
+</Accordion>
+
+### Configure environment variables
+
+Copy the example file and fill in your credentials:
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` in your editor and replace the placeholder values. Here is the full content of `.env.example` as a reference:
+
+```ini
+# ============================================================
+# CONFIGURACIÓN DEL SERVIDOR
+# ============================================================
+# Puerto donde va a escuchar el servidor Express.
+# Por defecto: 3000
+PORT=3000
+
+# ============================================================
+# CONEXIÓN A BASE DE DATOS MySQL
+# ============================================================
+# Dirección del servidor MySQL (localhost si está en tu máquina)
+DB_HOST=localhost
+
+# Puerto donde corre MySQL (el default de MySQL es 3306)
+DB_PORT=3306
+
+# Usuario con acceso a la base de datos
+DB_USER=root
+
+# Contraseña del usuario (dejalo vacío si no tenés contraseña)
+DB_PASSWORD=
+
+# Nombre de la base de datos que vas a usar
+DB_NAME=blackterz
+
+
+# Entorno de ejecución: 'production' activa límites estrictos
+# de seguridad (rate limiting). Dejar vacío o 'development'
+# para trabajar localmente sin restricciones agresivas.
+NODE_ENV=development
+
+
+# JWT
+JWT_SECRET=mi_clave_secreta_cambiame_en_produccion
+```
+
+The `.env.example` above covers the minimal setup. For email password recovery and exercise video support, also set `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASS`, `APP_URL`, and `ASCENDAPI_KEY`. See the [Configuration](/configuration) page for a full variable reference.
+
+### Start the server
+
+```bash
+npm start
+```
+
+When the server boots successfully you will see:
+
+```
+========================================
+  🚀 Servidor corriendo en el puerto 3000
+  📡 Healthcheck: http://localhost:3000/api/health
+  🖥️  Frontend:     http://localhost:3000/
+========================================
+```
+
+### Verify the installation
+
+Confirm the server and database connection are healthy:
+
+```bash
+curl http://localhost:3000/api/health
+```
+
+A successful response looks like:
+
+```json
+{"status":"ok","db":"conectada"}
+```
+
+Then open your browser and navigate to [http://localhost:3000](http://localhost:3000) to reach the Blackterz frontend. Register a new account, complete the onboarding form, and you will be automatically assigned a starter routine.
+
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+<Note>
+  **Development mode:** Run `npm run dev` instead of `npm start` to enable Node.js native file watching (`node --watch src/server.js`). The server will automatically restart whenever you save a change to any source file — no need to manually stop and restart.
+</Note>
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+<Tip>
+  **Auth rate limit:** The `/api/auth/register` and `/api/auth/login` endpoints are protected by `express-rate-limit` with a 15-minute sliding window. In development (`NODE_ENV` is anything other than `production`) the limit is **100 attempts per 15 minutes** per IP, so it will not interfere with local testing. In production (`NODE_ENV=production`) this drops to **10 attempts per 15 minutes** to defend against brute-force attacks.
 </Tip>
