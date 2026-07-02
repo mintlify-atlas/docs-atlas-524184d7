@@ -1,5 +1,5 @@
 ---
-title: "Security Model: JWT, bcrypt, Rate Limiting, and Anti-Spoofing"
+title: "Security: JWT, bcrypt, Rate Limiting, and Anti-Spoofing"
 sidebarTitle: "Security"
 description: "How Blackterz authenticates users, hashes passwords, prevents ID spoofing, limits brute-force attempts, and guards file uploads and SQL queries."
 ---
@@ -61,7 +61,7 @@ function verificarToken(req, res, next) {
 `jwt.verify()` performs three checks in one call: it verifies the HMAC-SHA256 **signature** (proving the token was issued by this server and has not been tampered with), it checks the **expiry** (`exp` claim), and it **decodes** the payload and returns it. If any check fails, it throws and the request never reaches the controller.
 
 <Tip>
-  The JWT payload contains `{ usuario_id, iat, exp }`. Controllers always read `req.usuario.usuario_id` — they never accept a user ID from `req.body` or `req.params` for operations that require ownership verification.
+  The JWT payload contains `{ usuario_id, nombre, email }` (plus `iat` and `exp` added automatically by `jwt.sign`). Controllers always read `req.usuario.usuario_id` — they never accept a user ID from `req.body` or `req.params` for operations that require ownership verification.
 </Tip>
 
 ## bcrypt Password Hashing
@@ -244,17 +244,33 @@ Avatar uploads are handled by `multer` with explicit restrictions on file type a
 ```js
 // src/controllers/usuarioController.js (multer configuration)
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, 'public/images/avatars/'),
+  destination: (req, file, cb) => cb(null, AVATAR_DIR),
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     cb(null, `avatar-${req.usuario.usuario_id}${ext}`);
   },
 });
+
+const fileFilter = (req, file, cb) => {
+  const allowed = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+  const ext = path.extname(file.originalname).toLowerCase();
+  if (allowed.includes(ext)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Solo se permiten imágenes (jpg, png, gif, webp)'), false);
+  }
+};
+
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB máximo
+});
 ```
 
 <CardGroup cols={2}>
   <Card title="File type filter" icon="file-shield">
-    Only images (`image/jpeg`, `image/png`, `image/gif`, `image/webp`) are accepted. Other MIME types are rejected before the file is written to disk.
+    Only files with extensions `.jpg`, `.jpeg`, `.png`, `.gif`, or `.webp` are accepted. The filter checks the extension of the original filename — files with any other extension are rejected before being written to disk.
   </Card>
   <Card title="Size limit" icon="weight-scale">
     Maximum upload size is **2 MB**. Requests exceeding this return a 400 error before the body is fully read.

@@ -28,7 +28,8 @@ Proyecto_Blackterz/
 └── src/
     ├── server.js                 ← Entry point: middlewares + routes + listener
     ├── config/
-    │   └── db.js                 ← mysql2/promise connection pool
+    │   ├── db.js                 ← mysql2/promise connection pool
+    │   └── mailer.js             ← Nodemailer SMTP transport (password reset emails)
     ├── middlewares/
     │   └── authMiddleware.js     ← JWT verification (verificarToken)
     ├── models/                   ← SQL queries and data transformation only
@@ -36,12 +37,16 @@ Proyecto_Blackterz/
     │   ├── rutinaModel.js
     │   ├── sesionModel.js
     │   ├── ejercicioModel.js
+    │   ├── estadisticasModel.js
+    │   ├── passwordResetModel.js
     │   └── usuarioModel.js
     ├── controllers/              ← HTTP logic, validation, response shaping
     │   ├── authController.js
     │   ├── rutinaController.js
     │   ├── sesionController.js
     │   ├── ejercicioController.js
+    │   ├── estadisticasController.js
+    │   ├── passwordResetController.js
     │   └── usuarioController.js
     └── routes/                   ← URL-to-controller mapping only
         ├── health.js
@@ -49,6 +54,7 @@ Proyecto_Blackterz/
         ├── rutinaRoutes.js
         ├── sesionRoutes.js
         ├── ejercicioRoutes.js
+        ├── estadisticasRoutes.js
         └── usuarioRoutes.js
 ```
 

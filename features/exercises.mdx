@@ -4,7 +4,7 @@ sidebarTitle: "Exercises"
 description: "Browse 64 seeded exercises with images, categories, and 15 muscle group assignments. Videos are served via AscendAPI and require a RapidAPI key."
 ---
 
-Blackterz ships with a catalog of **64 exercises** seeded from [strengthlevel.es](https://strengthlevel.es) data. Every exercise has a Spanish name, a description, a category (`fuerza`, `cardio`, etc.), a color `.avif` image (~12 KB each), and an optional looping MP4 video sourced via AscendAPI. The catalog is read-only from the API perspective — exercises are managed through database seeds and migrations, not end-user requests.
+Blackterz ships with a catalog of **64 exercises** seeded from [strengthlevel.es](https://strengthlevel.es) data. Every exercise has a Spanish name, a description, a category (all seeded entries use `fuerza`), a color `.avif` image (~12 KB each), and an optional looping MP4 video sourced via AscendAPI. The catalog is read-only from the API perspective — exercises are managed through database seeds and migrations, not end-user requests.
 
 ## Listing All Exercises
 
@@ -48,11 +48,11 @@ ORDER BY e.nombre ASC
 </ResponseField>
 
 <ResponseField name="categoria" type="string">
-  Exercise category. Values include `"fuerza"`, `"cardio"`, and others defined in the seed.
+  Exercise category. All 64 seeded exercises use the value `"fuerza"`. The column supports additional categories for future seed expansions.
 </ResponseField>
 
 <ResponseField name="imagen_url" type="string">
-  Server-relative path to the `.avif` image, e.g. `"/images/bench-press.avif"`. Served by `express.static`.
+  Filename of the `.avif` image, e.g. `"bench-press.avif"`. The frontend prepends `/images/` at render time to build the full path served by `express.static`.
 </ResponseField>
 
 <ResponseField name="gif_url" type="string | null">
@@ -67,11 +67,11 @@ ORDER BY e.nombre ASC
 
 ```json
 {
-  "id": 4,
+  "id": 1,
   "nombre": "Press de banca",
-  "descripcion": "Ejercicio compound para desarrollar el pecho, hombros y tríceps.",
+  "descripcion": "Ejercicio de barra para Pecho.",
   "categoria": "fuerza",
-  "imagen_url": "/images/bench-press.avif",
+  "imagen_url": "bench-press.avif",
   "gif_url": "https://cdn.ascendapi.com/exercises/bench-press.mp4",
   "musculos": "Hombros, Pecho, Tríceps"
 }

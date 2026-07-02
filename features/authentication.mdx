@@ -106,6 +106,8 @@ curl -X POST http://localhost:3000/api/auth/register \
 
 ### JWT payload structure
 
+The `jwt.sign` call in `authController.js` includes three application claims plus the standard `iat` and `exp` timestamps added automatically by `jsonwebtoken`:
+
 ```json
 {
   "usuario_id": 7,

@@ -81,7 +81,7 @@ Creates a new personalized routine for the authenticated user. An optional array
 **Auth required:** Yes — `Authorization: Bearer <token>`
 
 <Note>
-  Each user is limited to **4 active routines**. The count is checked at the moment of each creation request to eliminate race conditions between concurrent tabs or sessions. If the limit is already reached, the server returns `403 Forbidden` regardless of how the request was formed.
+  Each user is limited to **4 user-created routines**. System-recommended routines (where `es_recomendada = TRUE`, created automatically during onboarding) are excluded from this count. The limit is checked at the moment of each creation request to eliminate race conditions between concurrent tabs or sessions. If the limit is already reached, the server returns `403 Forbidden` regardless of how the request was formed.
 </Note>
 
 ### Request body

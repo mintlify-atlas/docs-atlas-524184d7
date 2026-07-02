@@ -1,10 +1,10 @@
 ---
 title: "Statistics API: Personal Records per Exercise"
 sidebarTitle: "Statistics"
-description: "Retrieve per-exercise personal records (max weight lifted) for the authenticated user, plus a health check endpoint to verify database connectivity."
+description: "Retrieve per-exercise personal records (maximum weight lifted) for the authenticated user, aggregated from all completed training session sets."
 ---
 
-The Statistics API surfaces two endpoints: a JWT-protected personal records (PRs) endpoint that aggregates each user's historical best performance per exercise, and an unauthenticated health check that verifies the MySQL connection is alive. The PR data is the backbone of the progress charts on the Blackterz frontend dashboard.
+The Statistics API surfaces the authenticated user's personal records (PRs) — the maximum weight ever lifted for every exercise they have trained. PR data is aggregated directly in SQL across all completed sets (`completada = 1`) and returned ordered by `peso_maximo DESC`. This endpoint powers the progress charts on the Blackterz frontend dashboard.
 
 ---
 
@@ -17,7 +17,7 @@ Returns the personal record — the maximum weight ever lifted — for every exe
 The query joins four tables: `sesiones_entrenamiento` → `sesion_ejercicios` → `sesion_series` → `ejercicios`. It groups by exercise and aggregates with `MAX(peso)`.
 
 <Tip>
-  The PR data returned by this endpoint feeds the progress charts displayed on the user's profile dashboard. Poll it after every completed workout session to keep the frontend charts up to date.
+  Poll this endpoint after every completed workout session to keep the frontend progress charts up to date.
 </Tip>
 
 ### Request
@@ -173,17 +173,19 @@ Verifies that the API server is running and that the MySQL database connection i
   </Tab>
 
   <Tab title="500 — Unhealthy">
+    When the database connection throws an error, the health route calls `next(error)` and the global error handler in `server.js` responds with a generic 500.
+
     <ResponseField name="status" type="string">
       `"error"`
     </ResponseField>
-    <ResponseField name="db" type="string">
-      `"desconectada"` — MySQL is unreachable or the pool threw an error.
+    <ResponseField name="message" type="string">
+      `"Error interno del servidor"`
     </ResponseField>
 
     ```json
     {
       "status": "error",
-      "db": "desconectada"
+      "message": "Error interno del servidor"
     }
     ```
   </Tab>

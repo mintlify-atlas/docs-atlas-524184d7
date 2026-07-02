@@ -37,6 +37,7 @@ The port is configurable via the `PORT` environment variable. If `PORT` is not s
     | `/api/sesiones/*` | Training sessions |
     | `/api/ejercicios` | Exercise catalog |
     | `/api/usuarios/*` | User profile and account |
+    | `/api/usuario/*` | Alias for `/api/usuarios/*` (singular form, e.g. `/api/usuario/perfil`) |
     | `/api/estadisticas/*` | Statistics and personal records |
 
     All protected routes require a valid `Authorization: Bearer <token>` header. Obtain a token by calling `POST /api/auth/login`.

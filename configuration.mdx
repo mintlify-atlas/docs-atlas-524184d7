@@ -1,7 +1,7 @@
 ---
 title: "Configure Blackterz: Environment Variables Reference"
 sidebarTitle: "Configuration"
-description: "Complete reference for every Blackterz environment variable: server port, MySQL connection, JWT secret, SMTP email, and the AscendAPI key for exercise videos."
+description: "Complete reference for every Blackterz .env variable: server port, MySQL connection, JWT secret, SMTP email settings, and AscendAPI key for videos."
 ---
 
 All Blackterz configuration is managed through a single `.env` file in the project root. The file is loaded at startup by `dotenv` before any other module initializes, so every variable is available in `process.env` throughout the entire application. No configuration is hardcoded in source files.
@@ -70,7 +70,7 @@ All `DB_*` variables are passed directly to the `mysql2` connection pool in `src
 </ParamField>
 
 <ParamField path="DB_NAME" type="string" required>
-  Name of the MySQL database. This **must be set to `fitness_app`**. The database is not named `blackterz` — that name refers to the application, not the schema. All migration files and seed scripts target `fitness_app` explicitly.
+  Name of the MySQL database. **`.env.example` ships this as `blackterz`**, but the actual running database is named `fitness_app` — that is the name used by all migration files and seed scripts. You must update this value after copying the example file or the server will fail to connect.
 
   ```ini
   DB_NAME=fitness_app
@@ -78,7 +78,7 @@ All `DB_*` variables are passed directly to the `mysql2` connection pool in `src
 </ParamField>
 
 <Note>
-  The database name in `.env.example` ships as `DB_NAME=blackterz`, which is incorrect and will cause a connection error. Always override this to `fitness_app` after copying the example file.
+  **Discrepancy:** `.env.example` sets `DB_NAME=blackterz`, but the application requires a database named `fitness_app` (an earlier project that was reused as the foundation for Blackterz). Always override this to `fitness_app` after running `cp .env.example .env`.
 </Note>
 
 ---

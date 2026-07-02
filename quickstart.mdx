@@ -1,7 +1,7 @@
 ---
-title: "Get Started with Blackterz in 5 Minutes"
+title: "Blackterz Quickstart: Run the Full API Server Locally"
 sidebarTitle: "Quickstart"
-description: "Clone the Blackterz repo, set up MySQL, run migrations, configure your .env file, and have the API server running on localhost:3000."
+description: "Clone the Blackterz repo, set up MySQL, run all database migrations in order, configure your .env, and start the API server on localhost:3000."
 ---
 
 This guide walks you through getting a fully functional Blackterz instance running on your local machine. By the end you will have the Express server running on port 3000, the `fitness_app` MySQL database seeded with 64 exercises and 15 muscle groups, and the Vanilla JS frontend accessible in your browser.
@@ -71,7 +71,7 @@ mysql -u root -p fitness_app < docs/migracion-rutinas-recomendadas.sql
 | `migracion-dropear-columnas.sql` | Drops 6 redundant columns from `sesion_ejercicios` and `sesion_series` |
 | `migracion-drop-estado.sql` | Drops `estado` from `sesiones_entrenamiento` (only completed sessions are persisted) |
 | `migracion-password-resets.sql` | Creates `password_resets` table for email-based recovery tokens |
-| `migracion-rutinas-recomendadas.sql` | Creates `rutinas_recomendadas` table for onboarding routine assignment |
+| `migracion-rutinas-recomendadas.sql` | Adds `es_recomendada` column to `rutinas` (flags onboarding-assigned routines) |
 </Accordion>
 
 ### Configure environment variables
@@ -131,7 +131,7 @@ npm start
 
 When the server boots successfully you will see:
 
-```
+```text
 ========================================
   🚀 Servidor corriendo en el puerto 3000
   📡 Healthcheck: http://localhost:3000/api/health

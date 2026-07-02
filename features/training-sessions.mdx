@@ -1,7 +1,7 @@
 ---
 title: "Recording and Reviewing Training Sessions in Blackterz"
 sidebarTitle: "Training Sessions"
-description: "Log every workout with per-set weight, reps, and completion data. Sessions are saved atomically across 3 tables with full history and progressive overload support."
+description: "Log every workout with per-set weight, reps, and completion data. Sessions are saved atomically across 3 tables with full history and overload tracking."
 ---
 
 A training session in Blackterz is a complete snapshot of one workout: which routine was used, which exercises were performed, and the exact weight, reps, and completion status of every individual set. Sessions are written to three database tables in a single SQL transaction so a partial write can never occur. Once saved, sessions are permanent — they cannot be edited or deleted — forming a reliable training history.

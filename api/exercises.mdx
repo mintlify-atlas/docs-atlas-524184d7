@@ -1,22 +1,18 @@
 ---
-title: "Exercises API: Browse the 64-Exercise Catalog"
+title: "Exercises API: Browse the Blackterz Exercise Catalog"
 sidebarTitle: "Exercises"
-description: "Retrieve the full 64-exercise strength catalog with muscle groups, images, and animated GIFs. Requires a valid Bearer token."
+description: "Retrieve the full exercise catalog with muscle groups, images, and GIFs. One authenticated GET returns every exercise sorted alphabetically by name."
 ---
 
-The Exercises API exposes the entire Blackterz exercise catalog in a single authenticated request. Each exercise object includes its name, category, static image, optional animated GIF, and a list of muscle groups with their role (`principal` or `secundario`). The catalog covers barbell, dumbbell, bodyweight, machine, and cable movements — all categorized under `fuerza` (strength).
+The Exercises API exposes the entire Blackterz exercise catalog in a single authenticated request. Each exercise object includes its name, category, static image, optional animated GIF URL, and a comma-separated string of associated muscle group names resolved via a SQL `GROUP_CONCAT` join. The catalog covers barbell, dumbbell, bodyweight, machine, and cable movements.
 
 ---
 
 ## GET /api/ejercicios
 
-Returns all 64 exercises in the catalog, ordered alphabetically by name. Each item includes its associated muscle groups, resolved by a SQL `LEFT JOIN` against the `ejercicios_grupos_musculares` and `grupos_musculares` tables.
+Returns all exercises in the catalog, ordered alphabetically by name. Muscle groups are resolved by a SQL `LEFT JOIN` against the `ejercicios_grupos_musculares` and `grupos_musculares` tables, collapsed into a single `musculos` string per row using `GROUP_CONCAT`.
 
 **Auth required:** Yes — `Authorization: Bearer <token>`
-
-<Note>
-  Exercise images are served as static files from the `/images/` path (e.g., `/images/bench-press.avif`). All images use the `.avif` format for optimal compression. The `gif_url` field is only populated when `ASCENDAPI_KEY` is configured in the server environment; if that key is absent, `gif_url` will be `null` for every exercise.
-</Note>
 
 ### Request
 
@@ -50,19 +46,19 @@ curl -X GET https://api.blackterzgym.com/api/ejercicios \
     </ResponseField>
 
     <ResponseField name="categoria" type="string">
-      Exercise category. Currently all seeded exercises use `"fuerza"` (strength).
+      Exercise category (e.g., `"fuerza"`).
     </ResponseField>
 
-    <ResponseField name="imagen_url" type="string">
+    <ResponseField name="imagen_url" type="string | null">
       Filename of the static preview image, e.g. `"bench-press.avif"`. Serve from `/images/<imagen_url>`.
     </ResponseField>
 
     <ResponseField name="gif_url" type="string | null">
-      URL to an animated demonstration GIF from the Ascend API. Returns `null` when `ASCENDAPI_KEY` is not set on the server.
+      URL to an animated demonstration GIF. Returns `null` when no GIF has been configured for this exercise.
     </ResponseField>
 
-    <ResponseField name="musculos" type="string">
-      Comma-separated list of muscle group names involved in this exercise, ordered alphabetically. Example: `"Glúteos, Isquiotibiales, Trampas"`. Built via SQL `GROUP_CONCAT`.
+    <ResponseField name="musculos" type="string | null">
+      Comma-separated list of muscle group names involved in this exercise, ordered alphabetically. Built via SQL `GROUP_CONCAT`. Example: `"Glúteos, Isquiotibiales, Trampas"`. Returns `null` if no muscle groups are mapped.
     </ResponseField>
   </Expandable>
 </ResponseField>
@@ -103,30 +99,6 @@ curl -X GET https://api.blackterzgym.com/api/ejercicios \
   ]
 }
 ```
-
-### Muscle groups reference
-
-The catalog maps exercises to 15 muscle groups. Each association has a `tipo` value of either `principal` (primary mover) or `secundario` (secondary/stabilizer).
-
-<Accordion title="All 15 muscle groups">
-  | ID | Name              |
-  |----|-------------------|
-  | 1  | Hombros           |
-  | 2  | Tríceps           |
-  | 3  | Pecho             |
-  | 4  | Aductores         |
-  | 5  | Antebrazos        |
-  | 6  | Bíceps            |
-  | 7  | Core              |
-  | 8  | Cuádriceps        |
-  | 9  | Espalda Baja      |
-  | 10 | Espalda Media     |
-  | 11 | Flexores Cadera   |
-  | 12 | Gemelos           |
-  | 13 | Glúteos           |
-  | 14 | Isquiotibiales    |
-  | 15 | Trampas           |
-</Accordion>
 
 ### Error responses
 

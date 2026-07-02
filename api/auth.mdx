@@ -16,7 +16,7 @@ The Auth API handles every step of the user identity lifecycle: account creation
 
 <span className="text-sm font-semibold text-green-500">POST</span> `/api/auth/register`
 
-Creates a new user account. On success, returns a signed JWT alongside the new user's public profile. The password is hashed with bcrypt (10 rounds) before being stored — the plain-text value never touches the database.
+Creates a new user account. On success, returns the new user's public profile (`id`, `nombre`, `email`). The password is hashed with bcrypt (10 rounds) before being stored — the plain-text value never touches the database. A JWT is **not** issued on registration; call `POST /api/auth/login` after registering to obtain a token.
 
 **Auth required:** No
 
@@ -78,7 +78,7 @@ Creates a new user account. On success, returns a signed JWT alongside the new u
 
 <CodeGroup>
 ```bash cURL
-curl -X POST https://your-api.com/api/auth/register \
+curl -X POST http://localhost:3000/api/auth/register \
   -H "Content-Type: application/json" \
   -d '{
     "nombre": "Alex Ramos",
@@ -171,7 +171,7 @@ Authenticates an existing user and returns a signed JWT. The token is valid for 
 
 <CodeGroup>
 ```bash cURL
-curl -X POST https://your-api.com/api/auth/login \
+curl -X POST http://localhost:3000/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "email": "alex@example.com",
@@ -237,7 +237,7 @@ Initiates the password-reset flow. If the submitted email belongs to an active a
 
 <CodeGroup>
 ```bash cURL
-curl -X POST https://your-api.com/api/auth/forgot-password \
+curl -X POST http://localhost:3000/api/auth/forgot-password \
   -H "Content-Type: application/json" \
   -d '{ "email": "alex@example.com" }'
 ```
@@ -303,7 +303,7 @@ Completes the password-reset flow. Accepts the token delivered via email and the
 
 <CodeGroup>
 ```bash cURL
-curl -X POST https://your-api.com/api/auth/reset-password \
+curl -X POST http://localhost:3000/api/auth/reset-password \
   -H "Content-Type: application/json" \
   -d '{
     "token": "a3f2e1d4c5b6a7f8...",
